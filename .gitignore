@@ -1,6 +1,7 @@
 # Local build and IDE state
 .idea/
 .gradle/
+.tooling/
 **/build/
 local.properties
 *.iml

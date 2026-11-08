@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">Дневник здоровья</string>
+    <string name="pressure_title">Давление</string>
+    <string name="medications_title">Лекарства</string>
+    <string name="pressure_empty_title">Пока нет измерений</string>
+    <string name="pressure_empty_body">Здесь появятся история и статистика вашего давления.</string>
+    <string name="medications_empty_title">Пока нет расписания</string>
+    <string name="medications_empty_body">Здесь появится расписание приёма ваших лекарств.</string>
+</resources>
