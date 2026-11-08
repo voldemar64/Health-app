@@ -1,0 +1,30 @@
+# Local build and IDE state
+.idea/
+.gradle/
+**/build/
+local.properties
+*.iml
+.DS_Store
+Thumbs.db
+
+# Local model and test audio caches
+.cache/
+models/**/weights/
+models/**/*.zip
+models/**/*.onnx
+models/**/*.bin
+models/**/*.pt
+models/**/*.tflite
+private-audio/
+
+# Local credentials and signing material
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+
+# Local application databases
+*.db
+*.db-shm
+*.db-wal
