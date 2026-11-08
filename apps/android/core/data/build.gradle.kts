@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.ksp)
 }
 
 android {
@@ -22,4 +23,11 @@ kotlin {
     compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) }
 }
 
-dependencies { implementation(project(":core:domain")) }
+ksp { arg("room.schemaLocation", "$projectDir/schemas") }
+
+dependencies {
+    implementation(project(":core:domain"))
+    implementation(libs.room.runtime)
+    implementation(libs.coroutines.core)
+    ksp(libs.room.compiler)
+}

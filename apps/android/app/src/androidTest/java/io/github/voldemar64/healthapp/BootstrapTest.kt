@@ -18,6 +18,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
 import org.junit.Rule
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -26,6 +27,14 @@ class BootstrapTest {
     @get:Rule
     val compose = createAndroidComposeRule<MainActivity>()
 
+    @Before
+    fun clearData() {
+        (compose.activity.application as HealthApplication).database.clearAllTables()
+        compose.waitUntil(10_000) {
+            compose.onAllNodes(hasText("Пока нет измерений")).fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
     private fun selectMedications() {
         compose.onNode(hasText("Лекарства") and hasClickAction()).performClick()
         compose.onNodeWithText("Пока нет расписания").assertIsDisplayed()
@@ -33,6 +42,8 @@ class BootstrapTest {
 
     @Test
     fun startsOnPressureAndRepeatedTabSelectionDoesNotDuplicateBackStack() {
+        assertEquals("ru", compose.activity.resources.configuration.locales[0].language)
+        assertEquals("ru", java.util.Locale.getDefault().language)
         compose.onNodeWithText("Пока нет измерений").assertIsDisplayed()
         repeat(3) { selectMedications() }
         compose.onNode(hasText("Лекарства") and hasClickAction()).assertIsSelected()
