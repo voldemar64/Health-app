@@ -30,6 +30,7 @@ class RoomHealthRepository(
     )
 
     override suspend fun savePressure(measurement: PressureMeasurement) {
+        validatePressureWrite(measurement)
         checkInput(!measurement.measuredAt.isAfter(clock.instant()), InputError.FUTURE)
         dao.pressure(PressureRow(measurement.id, measurement.systolic, measurement.diastolic,
             measurement.pulse, measurement.measuredAt.toString(), measurement.recordedZoneId, measurement.note))

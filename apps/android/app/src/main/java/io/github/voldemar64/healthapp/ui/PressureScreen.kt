@@ -1,17 +1,12 @@
 package io.github.voldemar64.healthapp.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import io.github.voldemar64.healthapp.R
@@ -43,7 +38,6 @@ internal fun PressureScreen(state: HealthState, model: HealthViewModel, padding:
     val list = pressureInRange(state.data.pressures, start, end, ZoneId.systemDefault())
     ScreenColumn(padding) {
         Heading(R.string.pressure_title)
-        ActionButton(R.string.add_pressure, Modifier.fillMaxWidth(), state.loaded) { editing = "new" }
         if (!state.loaded) Text(stringResource(R.string.loading))
         else if (state.data.pressures.isEmpty()) EmptyState(R.string.pressure_empty_title, R.string.pressure_empty_body)
         else {
@@ -61,7 +55,8 @@ internal fun PressureScreen(state: HealthState, model: HealthViewModel, padding:
                 val summary = summarize(list)!!
                 Text(stringResource(R.string.pressure_average, summary.systolic.roundToInt(),
                     summary.diastolic.roundToInt(), summary.count))
-                PressureChart(list)
+                MeasurementChart(list, pulse = false)
+                if (list.any { it.pulse != null }) MeasurementChart(list, pulse = true)
                 list.asReversed().forEach { item ->
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -89,61 +84,33 @@ internal fun PressureScreen(state: HealthState, model: HealthViewModel, padding:
 }
 
 @Composable
-private fun PressureForm(existing: PressureMeasurement?, saving: Boolean, padding: PaddingValues,
-    onClose: () -> Unit, onSave: (() -> PressureMeasurement) -> Unit) {
+internal fun PressureForm(existing: PressureMeasurement?, saving: Boolean, padding: PaddingValues,
+    onClose: () -> Unit, header: @Composable ColumnScope.() -> Unit = {}, onSave: (() -> PressureMeasurement) -> Unit) {
     val local = remember { (existing?.measuredAt ?: Instant.now()).atZone(ZoneId.systemDefault()) }
     var systolic by rememberSaveable { mutableStateOf(existing?.systolic?.toString() ?: "") }
     var diastolic by rememberSaveable { mutableStateOf(existing?.diastolic?.toString() ?: "") }
     var pulse by rememberSaveable { mutableStateOf(existing?.pulse?.toString() ?: "") }
-    var note by rememberSaveable { mutableStateOf(existing?.note ?: "") }
     var date by rememberSaveable { mutableStateOf(local.toLocalDate().toString()) }
     var time by rememberSaveable { mutableStateOf(local.toLocalTime().withSecond(0).withNano(0).toString()) }
     val id = rememberSaveable { existing?.id ?: newId() }
     BackHandler { if (!saving) onClose() }
     ScreenColumn(padding) {
+        header()
         Heading(if (existing == null) R.string.new_pressure else R.string.edit_pressure)
         Input(systolic, { systolic = it }, R.string.systolic, KeyboardType.Number)
         Input(diastolic, { diastolic = it }, R.string.diastolic, KeyboardType.Number)
         Input(pulse, { pulse = it }, R.string.pulse, KeyboardType.Number)
         DateButton(R.string.date, LocalDate.parse(date)) { date = it.toString() }
         TimeButton(LocalTime.parse(time)) { time = it.toString() }
-        Input(note, { note = it }, R.string.note, singleLine = false)
         ActionButton(R.string.save, Modifier.fillMaxWidth(), !saving) {
             onSave {
-                checkInput(pulse.isBlank() || pulse.toIntOrNull() != null, InputError.PULSE)
+                checkInput(pulse.toIntOrNull() != null, InputError.PULSE)
                 PressureMeasurement(id, systolic.toIntOrNull() ?: 0, diastolic.toIntOrNull() ?: 0,
                     pulse.takeIf { it.isNotBlank() }?.toIntOrNull(),
                     LocalDate.parse(date).atTime(LocalTime.parse(time)).atZone(ZoneId.systemDefault()).toInstant(),
-                    ZoneId.systemDefault().id, note.trim())
+                    ZoneId.systemDefault().id, existing?.note.orEmpty())
             }
         }
         ActionButton(R.string.cancel, enabled = !saving, onClick = onClose)
-    }
-}
-
-@Composable
-private fun PressureChart(list: List<PressureMeasurement>) {
-    val description = stringResource(R.string.chart_description)
-    val upper = MaterialTheme.colorScheme.primary
-    val lower = Color(0xFF8B3D14)
-    val min = list.minOf { it.diastolic }.toFloat() - 10
-    val max = list.maxOf { it.systolic }.toFloat() + 10
-    val first = list.first().measuredAt.toEpochMilli()
-    val span = (list.last().measuredAt.toEpochMilli() - first).coerceAtLeast(1)
-    Text(stringResource(R.string.chart_legend))
-    Text(stringResource(R.string.chart_scale, min.toInt(), max.toInt()))
-    Canvas(Modifier.fillMaxWidth().height(180.dp).semantics { contentDescription = description }) {
-        fun point(item: PressureMeasurement, value: Int) = Offset(
-            if (list.size == 1) size.width / 2 else 8.dp.toPx() +
-                ((item.measuredAt.toEpochMilli() - first).toDouble() / span * (size.width - 16.dp.toPx())).toFloat(),
-            size.height - (value - min) / (max - min) * size.height)
-        list.zipWithNext().forEach { (a, b) ->
-            drawLine(upper, point(a, a.systolic), point(b, b.systolic), 3.dp.toPx())
-            drawLine(lower, point(a, a.diastolic), point(b, b.diastolic), 3.dp.toPx())
-        }
-        list.forEach { item ->
-            drawCircle(upper, 4.dp.toPx(), point(item, item.systolic))
-            drawCircle(lower, 4.dp.toPx(), point(item, item.diastolic))
-        }
     }
 }

@@ -30,6 +30,7 @@ private val doseDraftSaver = listSaver<List<DoseDraft>, String>(
 @Composable
 internal fun MedicationForm(existing: ScheduleRevision?, initialDate: LocalDate, names: List<String>,
     padding: PaddingValues, saving: Boolean, onClose: () -> Unit,
+    header: @Composable ColumnScope.() -> Unit = {},
     onSave: (() -> Pair<ScheduleDraft, LocalDate>) -> Unit) {
     val draft = existing?.draft
     var name by rememberSaveable { mutableStateOf(draft?.name ?: "") }
@@ -43,6 +44,7 @@ internal fun MedicationForm(existing: ScheduleRevision?, initialDate: LocalDate,
     } ?: listOf(DoseDraft(newId(), "09:00", "1", "TABLET"))) }
     BackHandler { if (!saving) onClose() }
     ScreenColumn(padding) {
+        header()
         Heading(if (existing == null) R.string.new_medication else R.string.edit_schedule)
         Input(name, { name = it }, R.string.medication_name)
         val suggestions = names.filter { it != name && it.contains(name, ignoreCase = true) }.take(5)

@@ -1,8 +1,10 @@
 package io.github.voldemar64.healthapp
 
 import androidx.compose.ui.test.*
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.voldemar64.healthapp.domain.*
 import java.time.*
@@ -34,17 +36,52 @@ class ManualEntryTest {
         }
     }
     private fun click(text: String) {
+        // Exercise the accessible action; IME animation can move coordinates between scroll and tap.
+        // Navigation touch targets are exercised separately by BootstrapTest.
         val node = compose.onNode(hasText(text) and hasClickAction())
         if (text != "Лекарства" && text != "Давление") node.performScrollTo()
-        node.performClick()
+        node.performSemanticsAction(SemanticsActions.OnClick) { action -> check(action()) }
     }
     private fun type(label: String, value: String) { compose.onNodeWithText(label).performScrollTo().performTextReplacement(value) }
 
-    @Test fun pressureDraftSurvivesRecreationAndSaveUpdatesStatisticsThenEditAndDelete() {
-        click("+ Добавить измерение")
+    @Test fun unifiedEntryKeepsIndependentDraftsAndPulseIsRequired() {
+        compose.onNodeWithContentDescription("Добавить запись").performClick()
         type("Верхнее давление, мм рт. ст.", "120")
         type("Нижнее давление, мм рт. ст.", "80")
-        type("Пульс, уд/мин (необязательно)", "65")
+        compose.onNode(hasText("Лекарства") and hasClickAction()).performScrollTo().performClick()
+        type("Название лекарства", "Новое лекарство")
+        compose.onNode(hasText("Давление") and hasClickAction()).performScrollTo().performClick()
+        compose.onNodeWithText("120").assertExists()
+        click("Сохранить")
+        waitText("Введите пульс: целое число от 1 до 999. Поле обязательно.")
+        compose.onNodeWithText("Закрыть").performClick()
+        compose.onNode(hasText("Лекарства") and hasClickAction()).performScrollTo().performClick()
+        compose.onNodeWithText("Новое лекарство").assertExists()
+        click("Голосовой ввод")
+        compose.onNodeWithText("Начать / продолжить разговор").performScrollTo().assertIsDisplayed()
+        runBlocking { assertTrue(app.repository.data.first().pressures.isEmpty()) }
+    }
+
+    @Test fun chartShowsScaleAndSeparatePulseSeries() {
+        val now = Instant.now()
+        runBlocking {
+            (0..6).forEach { day -> app.repository.savePressure(PressureMeasurement(
+                systolic = 118 + day * 3, diastolic = 78 + day, pulse = 63 + day,
+                measuredAt = now.minusSeconds((6 - day) * 86400L + 60), recordedZoneId = ZoneId.systemDefault().id)) }
+        }
+        waitText("Давление · мм рт. ст.")
+        compose.onNode(hasContentDescription("Давление · мм рт. ст.", substring = true), useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+        val screenshot = compose.onRoot().captureToImage().asAndroidBitmap()
+        java.io.File(app.cacheDir, "pressure-chart.png").outputStream().use { screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+        screenshot.recycle()
+        compose.onNodeWithText("Пульс · уд/мин").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun pressureDraftSurvivesRecreationAndSaveUpdatesStatisticsThenEditAndDelete() {
+        compose.onNodeWithContentDescription("Добавить запись").performClick()
+        type("Верхнее давление, мм рт. ст.", "120")
+        type("Нижнее давление, мм рт. ст.", "80")
+        type("Пульс, уд/мин", "65")
         compose.activityRule.scenario.recreate()
         compose.onNodeWithText("120").assertExists()
         click("Сохранить")
@@ -64,7 +101,7 @@ class ManualEntryTest {
     }
 
     @Test fun invalidPressureDoesNotLeaveFormOrWriteData() {
-        click("+ Добавить измерение")
+        compose.onNodeWithContentDescription("Добавить запись").performClick()
         type("Верхнее давление, мм рт. ст.", "70")
         type("Нижнее давление, мм рт. ст.", "90")
         click("Сохранить")
@@ -76,7 +113,7 @@ class ManualEntryTest {
 
     @Test fun medicationFormStoresFractionAndWeeklyDaysAcrossRecreation() {
         click("Лекарства")
-        click("+ Добавить лекарство")
+        compose.onNodeWithContentDescription("Добавить запись").performClick()
         type("Название лекарства", "Тестовое лекарство")
         click("По дням недели")
         click("понедельник")
@@ -127,13 +164,14 @@ class ManualEntryTest {
         try {
             compose.activityRule.scenario.recreate()
             compose.waitUntil(10_000) { compose.activity.resources.configuration.fontScale >= 1.99f }
-            click("+ Добавить измерение")
+            compose.onNodeWithContentDescription("Добавить запись").performClick()
             type("Верхнее давление, мм рт. ст.", "120")
             type("Нижнее давление, мм рт. ст.", "80")
+            type("Пульс, уд/мин", "65")
             click("Сохранить")
             waitText("120/80 мм рт. ст.")
             click("Лекарства")
-            click("+ Добавить лекарство")
+            compose.onNodeWithContentDescription("Добавить запись").performClick()
             type("Название лекарства", "Две дозы")
             click("Добавить время")
             compose.activityRule.scenario.recreate()

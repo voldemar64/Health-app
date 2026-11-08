@@ -71,7 +71,6 @@ internal fun MedicationScreen(state: HealthState, model: HealthViewModel, paddin
     val counts = occurrences(state.data, start, end).groupingBy { it.date }.eachCount()
     ScreenColumn(padding) {
         Heading(R.string.medications_title)
-        ActionButton(R.string.add_medication, Modifier.fillMaxWidth(), state.loaded) { form = "new" }
         if (!state.loaded) Text(stringResource(R.string.loading))
         else if (state.data.schedules.isEmpty()) EmptyState(R.string.medications_empty_title, R.string.medications_empty_body)
         Choices(listOf("day", "week", "month"), mode, { stringResource(when (it) {
