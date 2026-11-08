@@ -1,43 +1,91 @@
 # Android приложение
 
-Планируемая сборка: Gradle Kotlin DSL с корнем в `apps/android`. Пять модулей создаются на этапе Android bootstrap; сейчас здесь находится только спецификация.
+«Дневник здоровья»: Android 10+, `io.github.voldemar64.healthapp`, русский интерфейс, только светлая тема. Bootstrap содержит две вкладки с пустыми состояниями. Хранение, формы, графики, речь и напоминания реализуются следующими этапами.
 
-```text
-apps/android/
-  app/                     # :app — Compose, ViewModel, навигация и сборка зависимостей
-  core/
-    domain/                # :core:domain — чистый Kotlin, правила и контракты
-    data/                  # :core:data — Room и реализации репозиториев
-  platform/
-    speech/                # :platform:speech — микрофон, Vosk и TextToSpeech
-    reminders/             # :platform:reminders — AlarmManager и уведомления
-  gradle/libs.versions.toml # Единые фиксированные версии зависимостей
-  settings.gradle.kts
-  build.gradle.kts
-  gradlew
-  gradlew.bat
+## Сборка и модули
+
+| Инструмент | Версия |
+| --- | --- |
+| Temurin JDK | 21.0.13+9 |
+| Gradle Wrapper | 8.13, SHA-256 в wrapper properties |
+| AGP | 8.13.2 |
+| Kotlin / Compose Compiler | 2.3.10 |
+| Java / Kotlin target | 17 |
+| min / compile / target SDK | 29 / 36 / 36 |
+| SDK Build Tools | 35.0.0 |
+
+Версии библиотек находятся в `gradle/libs.versions.toml`. JDK запускает сборку; target 17 задаёт байткод и не добавляет отсутствующие Android API.
+
+Lint считает предупреждения ошибками. Советы об обновлении фиксированных зависимостей и согласованного target SDK 36 имеют информационную важность: новый upstream-релиз сам по себе не ломает проверку bootstrap. Перед публикацией в магазине требования к target SDK проверяются отдельно.
+
+`app` содержит Activity, Compose, навигацию и UI-тесты. `core/domain` — граница будущей чистой Kotlin-логики. `core/data`, `platform/speech`, `platform/reminders` — границы хранения, речи и уведомлений. `app` зависит от четырёх библиотек; остальные Android-библиотеки зависят только от `domain`. Пустые модули не содержат фиктивных реализаций и тестов. `AppContainer` появится вместе с реальными runtime-зависимостями.
+
+## Windows
+
+PowerShell 7, команды из корня репозитория:
+
+```powershell
+# Скачать инструменты, проверить хеши, ознакомиться с SDK-лицензиями.
+./scripts/setup-android.ps1
+# Для уже прочитанных и принятых SDK-лицензий доступен -AcceptSdkLicenses.
+
+# Выполнять в каждой новой сессии:
+. ./scripts/android-env.ps1
+./apps/android/gradlew.bat -p apps/android test lint assembleDebug
 ```
 
-Gradle Wrapper и остальные файлы сборки из дерева пока не созданы. Версии JDK, Kotlin, AGP, Gradle и SDK будут зафиксированы совместно при bootstrap и проверены сборкой; установленная на машине JDK сама по себе не определяет toolchain проекта.
+Инструменты, AVD и Gradle-кеш находятся в игнорируемом `.tooling`, архивы — в `.cache`. Скрипты меняют переменные только текущего процесса. Системные PATH и JDK остаются прежними. Android Studio для сборки не требуется.
 
-## Организация UI
+Проверка ускорения и запуск эмулятора:
 
-В `:app` использовать пакеты `feature.pressure`, `feature.medications`, `feature.voice` и `di`. Пакеты экранов не обращаются напрямую к DAO, Vosk или AlarmManager. Отдельные Gradle-модули экранов понадобятся при независимой разработке или заметном росте сборки.
+```powershell
+. ./scripts/android-env.ps1
+emulator -accel-check
+emulator -avd health_api36 -memory 2048 -no-snapshot -gpu software
+```
 
-Для пяти модулей достаточно явного `AppContainer`: он создаёт базу, репозитории, распознаватель, планировщик и use cases. ViewModel получают зависимости через фабрики. Переход на DI-фреймворк — отдельное решение при росте графа.
+Команда запуска открывает окно эмулятора. Если ускорение недоступно, проверить виртуализацию в BIOS/UEFI и Windows Hypervisor Platform. Системные изменения и перезагрузка выполняются отдельно. Локальная проверка считается пройденной только после фактической загрузки устройства.
 
-## Зависимости
+В другом PowerShell:
 
-- `:app` → все четыре библиотечных модуля.
-- `:core:data` → `:core:domain`.
-- `:platform:speech` → `:core:domain`.
-- `:platform:reminders` → `:core:domain`.
-- `:core:domain` не зависит от других модулей проекта, Android, Room и Vosk; Kotlin Coroutines допустимы.
+```powershell
+. ./scripts/android-env.ps1
+adb wait-for-device
+./apps/android/gradlew.bat -p apps/android :app:connectedDebugAndroidTest
+adb install -r ./apps/android/app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -n io.github.voldemar64.healthapp/.MainActivity
+```
 
-Связи между адаптерами передаются через контракты из `domain`. Например, напоминания читают расписание через `MedicationRepository`, а реализацию Room предоставляет `AppContainer`.
+## Linux и CI
 
-## Будущие проверки сборки
+Нужны JDK 21, Android SDK и принятые лицензии. Указать `JAVA_HOME` и `ANDROID_HOME`, затем из этой директории:
 
-После bootstrap из этой директории должны работать `./gradlew test lint assembleDebug` и `gradlew.bat test lint assembleDebug` на Windows. До появления Wrapper это критерии готовности, а не доступные команды.
+```bash
+sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
+./gradlew test lint assembleDebug
+./gradlew :app:connectedDebugAndroidTest # при доступном устройстве
+```
 
-Общие границы и сценарии описаны в [архитектуре](../../docs/architecture.md).
+GitHub Actions выполняет сборку, lint и UI-тесты на API 29/36. JVM-задачи настроены; для пустых библиотек допустим `NO-SOURCE`. Проверки bootstrap находятся в `app/src/androidTest`.
+
+Actions → успешный запуск → Artifacts: `health-app-debug` и отчёты доступны семь дней. APK подписан отладочным ключом. Ключи локальной среды и CI-запусков могут различаться: при конфликте подписей сначала удалить прежнюю тестовую установку. После появления пользовательских данных удаление приложения приведёт к их потере; стабильная подпись тестовых выпусков — отдельная задача.
+
+## Проверка на телефоне
+
+Скачать артефакт `health-app-debug`, распаковать APK и открыть на Android 10+. При необходимости разрешить установку выбранному файловому менеджеру. Альтернатива — USB debugging и `adb install -r`; при нескольких устройствах указывать `adb -s SERIAL`.
+
+- Запуск показывает «Давление» и «Пока нет измерений».
+- «Лекарства» открывает «Пока нет расписания»; повторные нажатия не дублируют экран.
+- Back возвращает к давлению; следующий Back выполняет стандартное действие Android для корневой Activity.
+- Поворот сохраняет вкладку. При большом шрифте содержимое доступно прокруткой, вкладки видны.
+- При тёмной теме телефона стартовый экран и приложение остаются светлыми.
+- TalkBack объявляет подписи и выбранную вкладку; декоративные иконки не дублируют текст.
+- Нет запросов микрофона, уведомлений или сети.
+
+Физический телефон и TalkBack проверяются вручную; UI-тесты не заменяют оценку удобства чтения.
+
+## Приватность
+
+Bootstrap не записывает медицинские данные, аудио, транскрипты или технические логи. Manifest отключает backup, XML-правила исключают приватные области из облачного резервирования и переноса. Будущие логи должны содержать только состояния и коды ошибок. Модель и база пока отсутствуют.
+
+Общие правила — в [архитектуре](../../docs/architecture.md).

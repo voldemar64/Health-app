@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<lint>
+    <!-- The bootstrap toolchain is deliberately pinned. Report upgrade advice
+         without making an unrelated new upstream release fail the build. -->
+    <issue id="AndroidGradlePluginVersion" severity="informational" />
+    <issue id="GradleDependency" severity="informational" />
+    <issue id="NewerVersionAvailable" severity="informational" />
+    <!-- API 36 is the agreed bootstrap target, not a store-release policy. -->
+    <issue id="OldTargetApi" severity="informational" />
+</lint>
