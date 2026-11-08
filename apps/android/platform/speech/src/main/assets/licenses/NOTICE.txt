@@ -1,0 +1,30 @@
+Offline speech components in Health Diary 0.3.0
+
+Vosk Android SDK 0.3.75, Alpha Cephei and contributors.
+https://github.com/alphacep/vosk-api
+Apache License 2.0; unmodified Maven AAR.
+
+vosk-model-small-ru-0.22, Alpha Cephei.
+https://alphacephei.com/vosk/models
+The publisher's model catalogue identifies this model as Apache 2.0.
+The original archive contains a README but no separate license file.
+The original README is preserved at assets/vosk/README.
+Archive SHA-256:
+961d5ff98a17f4aa6de69864d0aa71fa5bac682301d2b5d17a3f24c5c99a46d4
+Weights are unmodified.
+
+Vosk native dependencies include Kaldi (https://github.com/kaldi-asr/kaldi),
+OpenFst (https://www.openfst.org), both Apache License 2.0,
+and OpenBLAS (https://github.com/OpenMathLib/OpenBLAS), BSD 3-Clause.
+See APACHE-2.0.txt and OPENBLAS-LICENSE.txt.
+
+Java Native Access 5.18.1 (https://github.com/java-native-access/jna).
+Copyright (c) 1998 Sun Microsystems, Inc. All Rights Reserved.
+Copyright (c) 2007-2013 Timothy Wall. All Rights Reserved.
+Copyright (c) 2007 Wayne Meissner. All Rights Reserved.
+JNA offers Apache-2.0 OR LGPL-2.1-or-later; this distribution uses Apache-2.0.
+See JNA-LICENSE.txt and APACHE-2.0.txt.
+libffi native dependency: see LIBFFI-LICENSE.txt (MIT).
+
+Speech synthesis uses an installed Android TextToSpeech engine.
+No synthesis engine or voice model is redistributed in this APK.

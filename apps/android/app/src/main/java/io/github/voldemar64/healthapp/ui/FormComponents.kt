@@ -77,7 +77,7 @@ internal fun TimeButton(time: LocalTime, onChange: (LocalTime) -> Unit) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun <T> Choices(values: List<T>, selected: T, label: @Composable (T) -> String, onSelect: (T) -> Unit) {
+internal fun <T> Choices(values: List<T>, selected: T?, label: @Composable (T) -> String, onSelect: (T) -> Unit) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         values.forEach { value ->
             FilterChip(selected == value, { onSelect(value) }, label = { Text(label(value)) },

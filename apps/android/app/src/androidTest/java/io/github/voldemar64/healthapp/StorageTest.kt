@@ -36,6 +36,18 @@ class StorageTest {
         listOf(DoseTime("morning", LocalTime.of(9, 0), Dose.parse("0.5", DoseUnit.TABLET)),
             DoseTime("evening", LocalTime.of(18, 0), Dose.parse("0.000001", DoseUnit.G))))
 
+    @Test fun legacyMissingPulseRemainsReadableButCannotBeWrittenAgain() = runBlocking {
+        db.dao().pressure(io.github.voldemar64.healthapp.data.PressureRow("legacy", 120, 80, null,
+            now.minusSeconds(60).toString(), "UTC", "Старый комментарий"))
+        val old = repository.data.first().pressures.single()
+        assertNull(old.pulse)
+        assertEquals("Старый комментарий", old.note)
+        try { repository.savePressure(old); fail("Pulse is required on every write") }
+        catch (expected: InvalidInput) { assertEquals(InputError.PULSE, expected.code) }
+        repository.savePressure(old.copy(pulse = 65))
+        assertEquals("Старый комментарий", repository.data.first().pressures.single().note)
+    }
+
     @Test fun diskReopenKeepsPressureScheduleExactDoseAndIntake() = runBlocking {
         val pressure = PressureMeasurement(systolic = 123, diastolic = 81, pulse = 65,
             measuredAt = now.minusSeconds(60), recordedZoneId = "UTC", note = "Комментарий")

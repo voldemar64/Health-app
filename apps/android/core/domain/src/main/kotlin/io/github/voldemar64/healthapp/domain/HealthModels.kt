@@ -35,6 +35,11 @@ data class PressureMeasurement(
 }
 
 enum class DoseUnit { TABLET, MG, G }
+// Legacy rows may have no pulse. Every new or edited record must supply it.
+fun validatePressureWrite(measurement: PressureMeasurement) {
+    checkInput(measurement.pulse != null, InputError.PULSE)
+}
+
 data class Dose(val amount: BigDecimal, val unit: DoseUnit) {
     init { checkInput(amount.signum() > 0 && amount.precision() <= 18 && amount.scale() <= 6, InputError.DOSE) }
     val text: String get() = amount.stripTrailingZeros().toPlainString()

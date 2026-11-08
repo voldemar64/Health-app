@@ -11,8 +11,12 @@ room = "2.8.4"
 ksp = "2.3.10"
 coroutines = "1.10.2"
 lifecycle = "2.9.4"
+vosk = "0.3.75"
+jna = "5.18.1"
 
 [libraries]
+vosk-android = { module = "com.alphacephei:vosk-android", version.ref = "vosk" }
+jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity" }
 androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "navigation" }
 androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "compose-bom" }

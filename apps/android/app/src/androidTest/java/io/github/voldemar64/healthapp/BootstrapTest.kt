@@ -86,7 +86,7 @@ class BootstrapTest {
             compose.activityRule.scenario.recreate()
             compose.onNodeWithText("Пока нет измерений").assertIsDisplayed()
             val pixels = compose.onRoot().captureToImage().toPixelMap()
-            assertEquals(Color(0xFFF7FAF9), pixels[0, 0])
+            assertEquals(Color(0xFFEDECF2), pixels[0, 0])
             compose.activityRule.scenario.onActivity { activity ->
                 val attrs = activity.obtainStyledAttributes(
                     intArrayOf(android.R.attr.windowLightStatusBar, android.R.attr.windowLightNavigationBar),
