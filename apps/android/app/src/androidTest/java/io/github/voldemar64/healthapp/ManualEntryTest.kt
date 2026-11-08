@@ -1,6 +1,7 @@
 package io.github.voldemar64.healthapp
 
 import androidx.compose.ui.test.*
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -67,7 +68,7 @@ class ManualEntryTest {
         }
         waitText("Давление · мм рт. ст.")
         compose.onNode(hasContentDescription("Давление · мм рт. ст.", substring = true), useUnmergedTree = true).performScrollTo().assertIsDisplayed()
-        val screenshot = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
+        val screenshot = compose.onRoot().captureToImage().asAndroidBitmap()
         java.io.File(app.cacheDir, "pressure-chart.png").outputStream().use { screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
         screenshot.recycle()
         compose.onNodeWithText("Пульс · уд/мин").performScrollTo().assertIsDisplayed()
