@@ -5,4 +5,6 @@
     <issue id="AndroidGradlePluginVersion" severity="informational" />
     <issue id="GradleDependency" severity="informational" />
     <issue id="NewerVersionAvailable" severity="informational" />
+    <!-- API 36 is the agreed bootstrap target, not a store-release policy. -->
+    <issue id="OldTargetApi" severity="informational" />
 </lint>

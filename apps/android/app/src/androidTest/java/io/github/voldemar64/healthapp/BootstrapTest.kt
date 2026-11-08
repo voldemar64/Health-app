@@ -67,6 +67,9 @@ class BootstrapTest {
 
     @Test
     fun darkSystemModeStillUsesLightWindowAndComposeBackground() {
+        val originalNightMode = Regex("Night mode: (\\w+)")
+            .find(shell("cmd uimode night"))?.groupValues?.get(1)
+            ?: error("Cannot read the original system night mode")
         shell("cmd uimode night yes")
         try {
             compose.activityRule.scenario.recreate()
@@ -85,7 +88,7 @@ class BootstrapTest {
                 }
             }
         } finally {
-            shell("cmd uimode night no")
+            shell("cmd uimode night $originalNightMode")
         }
     }
 
