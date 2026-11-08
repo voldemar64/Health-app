@@ -66,7 +66,7 @@ class ManualEntryTest {
                 measuredAt = now.minusSeconds((6 - day) * 86400L + 60), recordedZoneId = ZoneId.systemDefault().id)) }
         }
         waitText("Давление · мм рт. ст.")
-        compose.onNode(hasContentDescription("Давление · мм рт. ст.", substring = true)).performScrollTo().assertIsDisplayed()
+        compose.onNode(hasContentDescription("Давление · мм рт. ст.", substring = true), useUnmergedTree = true).performScrollTo().assertIsDisplayed()
         val screenshot = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
         java.io.File(app.cacheDir, "pressure-chart.png").outputStream().use { screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
         screenshot.recycle()
