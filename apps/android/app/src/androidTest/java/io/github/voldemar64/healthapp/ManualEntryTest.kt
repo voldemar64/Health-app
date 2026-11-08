@@ -4,6 +4,7 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.espresso.Espresso.closeSoftKeyboard
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.voldemar64.healthapp.domain.*
 import java.time.*
@@ -35,9 +36,12 @@ class ManualEntryTest {
         }
     }
     private fun click(text: String) {
+        // IME opening can move a button after scrollTo and before a coordinate click on API 36.
+        closeSoftKeyboard()
+        compose.waitForIdle()
         val node = compose.onNode(hasText(text) and hasClickAction())
         if (text != "Лекарства" && text != "Давление") node.performScrollTo()
-        node.performClick()
+        node.assertIsDisplayed().performClick()
     }
     private fun type(label: String, value: String) { compose.onNodeWithText(label).performScrollTo().performTextReplacement(value) }
 
