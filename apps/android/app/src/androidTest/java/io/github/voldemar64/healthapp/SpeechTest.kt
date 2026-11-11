@@ -51,13 +51,15 @@ class SpeechTest {
                 offset += 8 + length + length % 2
             }
             assertTrue(samples.isNotEmpty())
-            val result = recognizer.transcribe(samples)
-            val dialog = VoiceDialog()
-            dialog.accept(result, HealthData(), Instant.now(), ZoneOffset.UTC)
-            assertEquals("Synthetic fixture: $result", DialogPhase.CONFIRM, dialog.state.phase)
-            assertEquals(120, dialog.state.pressure!!.systolic)
-            assertEquals(80, dialog.state.pressure!!.diastolic)
-            assertEquals(65, dialog.state.pressure!!.pulse)
+            repeat(3) {
+                val result = recognizer.transcribe(samples)
+                val dialog = VoiceDialog()
+                dialog.accept(result, HealthData(), Instant.now(), ZoneOffset.UTC)
+                assertEquals("Synthetic fixture: $result", DialogPhase.CONFIRM, dialog.state.phase)
+                assertEquals("Synthetic fixture: $result", 120, dialog.state.pressure!!.systolic)
+                assertEquals("Synthetic fixture: $result", 80, dialog.state.pressure!!.diastolic)
+                assertEquals("Synthetic fixture: $result", 65, dialog.state.pressure!!.pulse)
+            }
             assertTrue(recognizer.transcribe(ShortArray(32000)).isBlank())
             SpeechContext.entries.filter { it != SpeechContext.FREE }.forEach { context ->
                 val silence = recognizer.transcribe(ShortArray(32000), context)

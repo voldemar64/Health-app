@@ -109,8 +109,19 @@ class OfflineRecognizer(private val context: Context) : VoiceInput {
         lock.withLock {
             prepareLocked()
             createRecognizer(context).use { recognizer ->
-                recognizer.acceptWaveForm(samples, samples.size)
-                JSONObject(recognizer.finalResult).optString("text")
+                val segments = mutableListOf<String>()
+                // Match AudioRecord's 100 ms frames and consume every completed utterance.
+                // A fixture can contain several endpointed phrases, unlike one listen() turn.
+                var offset = 0
+                while (offset < samples.size) {
+                    val frame = samples.copyOfRange(offset, minOf(offset + 1600, samples.size))
+                    if (recognizer.acceptWaveForm(frame, frame.size)) {
+                        segments += JSONObject(recognizer.result).optString("text")
+                    }
+                    offset += frame.size
+                }
+                segments += JSONObject(recognizer.finalResult).optString("text")
+                segments.filter(String::isNotBlank).joinToString(" ")
             }
         }
     }
