@@ -33,6 +33,8 @@ class ReleaseTests(unittest.TestCase):
     def github(self, endpoint, *args, **kwargs):
         if "/releases/tags/" in endpoint:
             return self.current
+        if "/releases?" in endpoint:
+            return []
         if "/git/ref/tags/" in endpoint:
             return None
         if endpoint.endswith("generate-notes"):
@@ -162,6 +164,18 @@ class ReleaseTests(unittest.TestCase):
         result = subprocess.CompletedProcess([], 1, "", "gh: outage (HTTP 503)")
         with patch.object(release.subprocess, "run", return_value=result), self.assertRaises(RuntimeError):
             release.api("repos/owner/repo/releases/tags/v0.4.0", missing_ok=True)
+
+    def test_draft_is_found_when_tag_endpoint_returns_404(self):
+        draft = {"tag_name": "v0.4.0", "draft": True, "id": 123}
+        with patch.object(release, "api", side_effect=[None, [draft]]) as api:
+            self.assertEqual(draft, release.release_for_tag("owner/repo", "v0.4.0"))
+        self.assertIn("/releases?per_page=100&page=1", api.call_args.args[0])
+
+    def test_draft_lookup_continues_after_full_page(self):
+        other = {"tag_name": "v0.3.0"}
+        draft = {"tag_name": "v0.4.0", "draft": True}
+        with patch.object(release, "api", side_effect=[None, [other] * 100, [draft]]):
+            self.assertEqual(draft, release.release_for_tag("owner/repo", "v0.4.0"))
 
     def test_existing_tag_cannot_be_retargeted(self):
         def github(endpoint, *args, **kwargs):

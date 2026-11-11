@@ -24,6 +24,22 @@ def api(endpoint, *args, missing_ok=False):
     return json.loads(result.stdout)
 
 
+def release_for_tag(repo, tag):
+    published = api(f"repos/{repo}/releases/tags/{tag}", missing_ok=True)
+    if published:
+        return published
+    # GitHub's tag endpoint excludes unpublished drafts; authenticated listing includes them.
+    page = 1
+    while True:
+        releases = api(f"repos/{repo}/releases?per_page=100&page={page}")
+        for item in releases:
+            if item["tag_name"] == tag:
+                return item
+        if len(releases) < 100:
+            return None
+        page += 1
+
+
 def metadata(directory):
     data = json.loads((directory / "output-metadata.json").read_text(encoding="utf-8"))
     if data.get("applicationId") != "io.github.voldemar64.healthapp" or data.get("variantName") != "debug":
@@ -81,8 +97,7 @@ def publish(directory, output, env, expected_fingerprint, draft_only=False):
     version, code, apk = metadata(directory)
     tag = f"v{version}"
     repo, commit = env["GITHUB_REPOSITORY"], env["GITHUB_SHA"]
-    endpoint = f"repos/{repo}/releases/tags/{tag}"
-    existing = api(endpoint, missing_ok=True)
+    existing = release_for_tag(repo, tag)
     if existing and not existing["draft"]:
         print(f"Already published, unchanged: {existing['html_url']}")
         return existing["html_url"]
@@ -115,13 +130,13 @@ def publish(directory, output, env, expected_fingerprint, draft_only=False):
     checksums.write_text(f"{sha256(signed)}  {signed.name}\n", encoding="utf-8")
     # Only drafts may be repaired. Published releases above are never overwritten.
     run("gh", "release", "upload", tag, str(signed), str(checksums), "--repo", repo, "--clobber")
-    release = api(endpoint)
+    release = release_for_tag(repo, tag)
     expected = {path.name: (path.stat().st_size, "sha256:" + sha256(path)) for path in (signed, checksums)}
     assets = {asset["name"]: (asset["size"], asset.get("digest")) for asset in release["assets"]}
     if not release["draft"] or release["target_commitish"] != commit or assets != expected:
         raise ValueError("Draft assets/source did not verify; release remains unpublished")
     run("gh", "release", "edit", tag, "--repo", repo, "--draft=false", "--prerelease")
-    result = api(endpoint)
+    result = release_for_tag(repo, tag)
     if result["draft"]:
         raise ValueError("GitHub did not publish the release")
     print(result["html_url"])
