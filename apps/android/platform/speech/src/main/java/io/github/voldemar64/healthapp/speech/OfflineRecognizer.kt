@@ -15,6 +15,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import org.vosk.LibVosk
 import org.vosk.Model
@@ -72,16 +73,16 @@ class OfflineRecognizer(private val context: Context) : VoiceInput {
         }
     }
 
-    override suspend fun listen(onPartial: (String) -> Unit): String = withContext(Dispatchers.IO) {
+    override suspend fun listen(context: SpeechContext, onPartial: (String) -> Unit): String = withContext(Dispatchers.IO) {
         lock.withLock {
             prepareLocked()
-            if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) throw SpeechFailure("PERMISSION")
+            if (this@OfflineRecognizer.context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) throw SpeechFailure("PERMISSION")
             val buffer = maxOf(6400, AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT))
             val audio = AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, 16000,
                 AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, buffer)
             try {
                 if (audio.state != AudioRecord.STATE_INITIALIZED) throw SpeechFailure("MICROPHONE")
-                Recognizer(model, 16000f).use { recognizer ->
+                createRecognizer(context).use { recognizer ->
                     audio.startRecording()
                     val samples = ShortArray(1600)
                     val started = SystemClock.elapsedRealtime()
@@ -104,16 +105,50 @@ class OfflineRecognizer(private val context: Context) : VoiceInput {
     }
 
     /** Used by instrumentation to exercise the native model with deterministic PCM fixtures. */
-    suspend fun transcribe(samples: ShortArray): String = withContext(Dispatchers.IO) {
+    suspend fun transcribe(samples: ShortArray, context: SpeechContext = SpeechContext.FREE): String = withContext(Dispatchers.IO) {
         lock.withLock {
             prepareLocked()
-            Recognizer(model, 16000f).use { recognizer ->
+            createRecognizer(context).use { recognizer ->
                 recognizer.acceptWaveForm(samples, samples.size)
                 JSONObject(recognizer.finalResult).optString("text")
             }
         }
     }
 
+    private fun createRecognizer(context: SpeechContext): Recognizer {
+        val phrases = context.phrases() ?: return Recognizer(model, 16000f)
+        return Recognizer(model, 16000f, JSONArray(phrases).toString())
+    }
+
     override suspend fun release() = withContext(Dispatchers.IO) { lock.withLock { model?.close(); model = null } }
     private companion object { val installationLock = Any() }
+}
+
+/** Restrict only closed answers. Names and complete commands keep the model's full vocabulary. */
+internal fun SpeechContext.phrases(): List<String>? {
+    val numbers = ("ноль нуль один одна одну два две три четыре пять шесть семь восемь девять десять " +
+        "одиннадцать двенадцать тринадцать четырнадцать пятнадцать шестнадцать семнадцать восемнадцать девятнадцать " +
+        "двадцать тридцать сорок пятьдесят шестьдесят семьдесят восемьдесят девяносто " +
+        "сто двести триста четыреста пятьсот шестьсот семьсот восемьсот девятьсот тысяча").split(' ')
+    val units = listOf("таблетка", "таблетки", "таблетку", "таблеток", "миллиграмм", "миллиграмма", "миллиграммов",
+        "грамм", "грамма", "граммов")
+    val vocabulary = when (this) {
+        SpeechContext.FREE -> return null
+        SpeechContext.CONFIRM -> listOf("да", "нет", "исправить")
+        SpeechContext.NUMBER -> numbers + units + listOf("половина", "половину", "полтаблетки", "четверть",
+            "полтора", "полторы", "целых", "целая", "десятых", "десятая", "запятая", "точка", "с половиной")
+        SpeechContext.TIME -> numbers + listOf("в", "и", "утра", "утром", "дня", "днем", "вечера", "вечером",
+            "ночи", "ночью", "час", "часа", "часов", "минут", "минута", "минуты")
+        SpeechContext.WEEKDAY -> listOf("понедельник", "понедельникам", "вторник", "вторникам", "среда", "среду", "средам",
+            "четверг", "четвергам", "пятница", "пятницу", "пятницам", "суббота", "субботу", "субботам",
+            "воскресенье", "воскресеньям", "и", "по", "в")
+        SpeechContext.CHOICE -> numbers + listOf("номер", "исправить")
+        SpeechContext.CORRECTION -> listOf("верхнее давление", "нижнее давление", "пульс", "название", "количество",
+            "доза", "единицы", "время", "повтор", "дни недели", "дата", "окончание")
+        SpeechContext.UNIT -> units
+        SpeechContext.REPEAT -> listOf("однократно", "один раз", "разово", "каждый день", "ежедневно", "по дням недели",
+            "каждую неделю", "один раз в неделю", "еженедельно")
+    }
+    // Unknown speech must remain unknown rather than being forced into a valid confirmation.
+    return (vocabulary + listOf("отмена", "стоп", "[unk]")).distinct()
 }

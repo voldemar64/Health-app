@@ -61,17 +61,14 @@ fun HealthApp(model: HealthViewModel) {
             composable("pressure") { PressureScreen(state, model, padding) }
             composable("medications") { MedicationScreen(state, model, padding) }
             composable("add/{tab}") { backStack ->
-                EntryScreen(backStack.arguments?.getString("tab") ?: "pressure", state, model, padding,
-                    onClose = { nav.popBackStack() }, onVoice = { nav.navigate("voice") })
-            }
-            composable("voice") { backStack ->
                 val context = LocalContext.current
                 val voice: VoiceViewModel = viewModel(backStack, factory = VoiceViewModel.factory(context,
                     (context.applicationContext as HealthApplication).repository))
-                VoiceScreen(voice, padding, onClose = { nav.popBackStack() }, onNavigate = { route ->
-                    nav.popBackStack("pressure", false)
-                    select(route)
-                })
+                EntryScreen(backStack.arguments?.getString("tab") ?: "pressure", state, model, voice, padding,
+                    onClose = { nav.popBackStack() }, onNavigate = { route ->
+                        nav.popBackStack()
+                        select(route)
+                    })
             }
         }
     }
@@ -84,22 +81,36 @@ fun HealthApp(model: HealthViewModel) {
 }
 
 @Composable
-private fun EntryScreen(initialTab: String, state: HealthState, model: HealthViewModel, padding: PaddingValues,
-    onClose: () -> Unit, onVoice: () -> Unit) {
-    var tab by rememberSaveable { mutableStateOf(initialTab) }
-    val holder = rememberSaveableStateHolder()
+internal fun EntryScreen(initialTab: String, state: HealthState, model: HealthViewModel, voice: VoiceViewModel,
+    padding: PaddingValues, onClose: () -> Unit, onNavigate: (String) -> Unit) {
+    val speech by voice.state.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) {
+        if (speech.dialog.draft == null) voice.initialize(if (initialTab == "pressure") io.github.voldemar64.healthapp.domain.VoiceKind.PRESSURE
+            else io.github.voldemar64.healthapp.domain.VoiceKind.MEDICATION)
+    }
+    LaunchedEffect(speech.destination, speech.saved) {
+        speech.destination?.let(onNavigate)
+        if (speech.saved) onNavigate(if (speech.kind == io.github.voldemar64.healthapp.domain.VoiceKind.PRESSURE) "pressure" else "medications")
+    }
+    val tab = if (speech.kind == io.github.voldemar64.healthapp.domain.VoiceKind.PRESSURE) "pressure" else "medications"
+    val saving = state.saving || speech.dialog.phase == io.github.voldemar64.healthapp.domain.DialogPhase.COMMIT && speech.error == null
+    val close = { voice.pause(); onClose() }
     val header: @Composable ColumnScope.() -> Unit = {
         Choices(listOf("pressure", "medications"), tab,
-            { stringResource(if (it == "pressure") R.string.pressure_title else R.string.medications_title) }) { if (!state.saving) tab = it }
-        ActionButton(R.string.voice_entry, Modifier.fillMaxWidth(), !state.saving, onVoice)
-    }
-    holder.SaveableStateProvider(tab) {
-        if (tab == "pressure") PressureForm(null, state.saving, padding, onClose, header) { value ->
-            model.save(onSuccess = onClose) { savePressure(value()) }
-        } else MedicationForm(null, LocalDate.now(), state.data.schedules.map { it.draft.name }.distinct(),
-            padding, state.saving, onClose, header) { value ->
-            model.save(onSuccess = onClose) { saveSchedule(value().first) }
+            { stringResource(if (it == "pressure") R.string.pressure_title else R.string.medications_title) }) {
+            if (!saving) voice.selectKind(if (it == "pressure") io.github.voldemar64.healthapp.domain.VoiceKind.PRESSURE
+                else io.github.voldemar64.healthapp.domain.VoiceKind.MEDICATION)
         }
+        VoiceControls(voice, speech, !saving)
+    }
+    if (tab == "pressure") PressureForm(null, saving, padding, close, header,
+        speech.pressureForm, voice::updateDraft) { value ->
+        voice.pause()
+        model.save(onSuccess = { onNavigate("pressure") }) { savePressure(value()) }
+    } else MedicationForm(null, LocalDate.now(), state.data.schedules.map { it.draft.name }.distinct(),
+        padding, saving, close, header, speech.medicationForm, voice::updateDraft) { value ->
+        voice.pause()
+        model.save(onSuccess = { onNavigate("medications") }) { saveSchedule(value().first) }
     }
 }
 
