@@ -78,6 +78,66 @@ class StorageTest {
         assertEquals(2, occurrences(state, today, today).size)
     }
 
+    @Test fun takenNowIsAtomicAndRepeatedCallbacksKeepOriginalTimestamp() = runBlocking {
+        repository.saveSchedule(draft())
+        val item = occurrences(repository.data.first(), today, today).first()
+        (1..8).map { async { repository.markTakenNow(item) } }.awaitAll()
+        val initial = repository.data.first().intakes.single()
+        assertEquals(now, initial.takenAt)
+        val later = RoomHealthRepository(db, Clock.offset(Clock.fixed(now, ZoneOffset.UTC), Duration.ofHours(2))) { zone }
+        (1..8).map { async { later.markTakenNow(item) } }.awaitAll()
+        assertEquals(listOf(initial), repository.data.first().intakes)
+    }
+
+    @Test fun takenNowRejectsPastAndFutureWithoutChangingStorage() = runBlocking {
+        repository.saveSchedule(draft())
+        val initial = repository.data.first()
+        val item = occurrences(initial, today, today).first()
+        val tomorrow = occurrences(initial, today.plusDays(1), today.plusDays(1)).first()
+        try { repository.markTakenNow(tomorrow); fail("Future occurrence must be rejected") }
+        catch (expected: InvalidInput) { assertEquals(InputError.FUTURE, expected.code) }
+        val nextDay = RoomHealthRepository(db, Clock.offset(Clock.fixed(now, ZoneOffset.UTC), Duration.ofDays(1))) { zone }
+        try { nextDay.markTakenNow(item); fail("Past occurrence must be rejected") }
+        catch (expected: InvalidInput) { assertEquals(InputError.FUTURE, expected.code) }
+        assertEquals(initial, repository.data.first())
+    }
+
+    @Test fun takenNowUsesLocalDateAndReplacesLegacySkippedMark() = runBlocking {
+        repository.saveSchedule(draft())
+        val item = occurrences(repository.data.first(), today, today).first()
+        repository.mark(item, IntakeStatus.SKIPPED, null)
+        val legacy = repository.data.first().intakes.single()
+        zone = ZoneId.of("Asia/Tokyo")
+        val localMorning = Instant.parse("2026-11-08T23:30:00Z")
+        val localRepository = RoomHealthRepository(db, Clock.fixed(localMorning, ZoneOffset.UTC)) { zone }
+        localRepository.markTakenNow(item)
+        val record = repository.data.first().intakes.single()
+        assertEquals(IntakeStatus.TAKEN, record.status)
+        assertEquals(localMorning, record.takenAt)
+        assertEquals(legacy.plannedAt, record.plannedAt)
+        assertEquals(legacy.recordedZoneId, record.recordedZoneId)
+    }
+
+    @Test fun undoTodayKeepsOccurrenceSnapshotAndRejectsUndoAfterMidnight() = runBlocking {
+        repository.saveSchedule(draft())
+        val initial = repository.data.first()
+        val item = occurrences(initial, today, today).last()
+        repository.markTakenNow(item)
+        repository.saveSchedule(draft().copy(name = "Новое название", slots = listOf(draft().slots.first())),
+            initial.schedules.single().seriesId, today)
+        repository.unmarkToday(item.key)
+        val undone = repository.data.first()
+        assertTrue(undone.intakes.isEmpty())
+        assertEquals(item, undone.exceptions.single())
+        assertEquals(item, occurrences(undone, today, today).find { it.key == item.key })
+        repository.markTakenNow(item)
+        val marked = repository.data.first()
+        val nextDay = RoomHealthRepository(db, Clock.offset(Clock.fixed(now, ZoneOffset.UTC), Duration.ofDays(1))) { zone }
+        try { nextDay.unmarkToday(item.key); fail("Historical marks must be read-only") }
+        catch (expected: InvalidInput) { assertEquals(InputError.FUTURE, expected.code) }
+        assertEquals(marked, repository.data.first())
+    }
+
     @Test fun revisionsKeepPastAndFactsAndReplaceFutureWithoutDuplicates() = runBlocking {
         repository.saveSchedule(draft())
         val state = repository.data.first()

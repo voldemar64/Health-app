@@ -1,6 +1,7 @@
 # Local build and IDE state
 .idea/
 .gradle/
+.kotlin/
 .tooling/
 **/build/
 local.properties
@@ -29,3 +30,6 @@ private-audio/
 *.db
 *.db-shm
 *.db-wal
+
+# Python CI helper bytecode
+__pycache__/

@@ -14,7 +14,9 @@ private fun voiceRegex(pattern: String): Regex {
 
 enum class VoiceKind { PRESSURE, MEDICATION, MARK }
 enum class VoiceField { SYSTOLIC, DIASTOLIC, PULSE, NAME, AMOUNT, UNIT, TIMES, REPEAT, DAYS, DATE, END_DATE, STATUS }
-data class VoiceDraft(val kind: VoiceKind, val values: Map<VoiceField, String> = emptyMap(), val id: String = newId()) {
+data class VoiceDose(val id: String = newId(), val time: String = "09:00", val amount: String = "1", val unit: String = "TABLET")
+data class VoiceDraft(val kind: VoiceKind, val values: Map<VoiceField, String> = emptyMap(), val id: String = newId(),
+    val slots: List<VoiceDose>? = null) {
     fun missing(): VoiceField? {
         val required = when (kind) {
             VoiceKind.PRESSURE -> listOf(VoiceField.SYSTOLIC, VoiceField.DIASTOLIC, VoiceField.PULSE)
@@ -82,6 +84,7 @@ object VoiceParser {
 
     fun parse(raw: String, today: LocalDate): VoiceCommand {
         val text = RussianNumbers.normalize(raw)
+        if (text.contains("пропус") || text.contains("пропущ")) return VoiceCommand.Unknown
         if (voiceRegex("\\b(?:удал[а-я]*|сотр[а-я]*|редакт[а-я]*)\\b").containsMatchIn(text)) return VoiceCommand.Unknown
         if ((text.contains("что") && voiceRegex("приним|пить|принять").containsMatchIn(text)) ||
             voiceRegex("проч[а-я]*|зачит[а-я]*|озвуч[а-я]*").containsMatchIn(text) && (drug.containsMatchIn(text) || text.contains("расписан"))) {
@@ -156,7 +159,21 @@ object VoiceParser {
         }
         if (expected != VoiceField.END_DATE) parseDate(text.substringBefore(" до "), today)?.let { values[VoiceField.DATE] = it.format(dateFormat) }
         if (text.contains(" до ")) parseDate(text.substringAfter(" до "), today)?.let { values[VoiceField.END_DATE] = it.format(dateFormat) }
-        return draft.copy(values = values)
+        val doseChanged = listOf(VoiceField.AMOUNT, VoiceField.UNIT).any { values[it] != draft.values[it] }
+        val timeChanged = values[VoiceField.TIMES] != draft.values[VoiceField.TIMES]
+        val slots = when {
+            doseChanged -> null
+            timeChanged && draft.slots != null -> {
+                val times = values[VoiceField.TIMES].orEmpty().split(';').map(String::trim)
+                if (times.size == draft.slots.size) draft.slots.mapIndexed { index, slot -> slot.copy(time = times[index]) }
+                else {
+                    checkInput(draft.slots.map { it.amount to it.unit }.distinct().size <= 1, InputError.TIMES)
+                    null
+                }
+            }
+            else -> draft.slots
+        }
+        return draft.copy(values = values, slots = slots)
     }
 
     private fun unit(text: String): String? = when {
@@ -194,6 +211,7 @@ object VoiceParser {
         return ScheduleDraft(values[VoiceField.NAME].orEmpty(), Repeat.valueOf(values[VoiceField.REPEAT].orEmpty()),
             values[VoiceField.DAYS].orEmpty().split(',').mapNotNull { it.trim().toIntOrNull()?.let(DayOfWeek::of) }.toSet(),
             date, values[VoiceField.END_DATE]?.takeIf { it.isNotBlank() }?.let { LocalDate.parse(it, dateFormat) },
-            times.mapIndexed { index, time -> DoseTime("${draft.id}-$index", time, amount) })
+            draft.slots?.map { DoseTime(it.id, LocalTime.parse(it.time), Dose.parse(it.amount, DoseUnit.valueOf(it.unit))) }
+                ?: times.mapIndexed { index, time -> DoseTime("${draft.id}-$index", time, amount) })
     }
 }

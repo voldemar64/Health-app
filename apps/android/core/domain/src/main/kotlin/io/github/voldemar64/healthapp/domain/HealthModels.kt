@@ -153,5 +153,9 @@ interface HealthRepository {
     suspend fun saveSchedule(draft: ScheduleDraft, seriesId: String? = null, from: LocalDate? = null)
     suspend fun editOccurrence(original: Occurrence, replacement: Occurrence)
     suspend fun mark(occurrence: Occurrence, status: IntakeStatus, takenAt: Instant?)
+    /** Marks a current local-day occurrence once, using the repository clock. */
+    suspend fun markTakenNow(occurrence: Occurrence)
     suspend fun unmark(key: String)
+    /** Cancels a mark only while its occurrence belongs to the current local day. */
+    suspend fun unmarkToday(key: String)
 }

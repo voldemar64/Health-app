@@ -1,0 +1,60 @@
+diff --git a/.github/workflows/android.yml b/.github/workflows/android.yml
+index fd8b9c0..e80cbeb 100644
+--- a/.github/workflows/android.yml
++++ b/.github/workflows/android.yml
+@@ -11,7 +11,7 @@ permissions:
+ 
+ concurrency:
+   group: android-${{ github.workflow }}-${{ github.ref }}
+-  cancel-in-progress: true
++  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+ 
+ defaults:
+   run:
+@@ -35,13 +35,18 @@ jobs:
+           cmdline-tools-version: '13114758'
+           packages: 'platform-tools platforms;android-36 build-tools;35.0.0'
+           log-accepted-android-sdk-licenses: false
++      - name: Release automation tests
++        working-directory: .
++        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
+       - name: JVM tests, lint and APK
+         run: ./gradlew test lint assembleDebug --stacktrace
+       - name: Upload debug APK
+         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+         with:
+           name: health-app-debug
+-          path: apps/android/app/build/outputs/apk/debug/app-debug.apk
++          path: |
++            apps/android/app/build/outputs/apk/debug/app-debug.apk
++            apps/android/app/build/outputs/apk/debug/output-metadata.json
+           if-no-files-found: error
+           retention-days: 7
+       - name: Upload build reports
+@@ -100,3 +105,26 @@ jobs:
+             apps/android/app/build/reports/androidTests/
+             apps/android/app/build/outputs/androidTest-results/
+           retention-days: 7
++
++  release:
++    name: Prepare Android release draft
++    needs: [build, device-tests]
++    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
++    runs-on: ubuntu-24.04
++    timeout-minutes: 15
++    permissions:
++      contents: write
++      actions: read
++    defaults:
++      run:
++        working-directory: .
++    steps:
++      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
++      - name: Download APK from this CI run
++        env:
++          GH_TOKEN: ${{ github.token }}
++        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name health-app-debug --dir release-input
++      - name: Prepare a new version draft
++        env:
++          GH_TOKEN: ${{ github.token }}
++        run: python3 .github/scripts/release_android.py --input release-input --output release-output --certificate .github/android-signing-cert.sha256 --draft-only

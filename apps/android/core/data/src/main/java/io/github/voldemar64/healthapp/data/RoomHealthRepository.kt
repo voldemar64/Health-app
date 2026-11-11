@@ -93,13 +93,43 @@ class RoomHealthRepository(
         }
     }
 
+    override suspend fun markTakenNow(occurrence: Occurrence) {
+        database.withTransaction {
+            val now = clock.instant()
+            val currentZone = zone()
+            checkInput(occurrence.date == now.atZone(currentZone).toLocalDate(), InputError.FUTURE)
+            val state = snapshot()
+            checkInput(occurrences(state, occurrence.date, occurrence.date).any { it == occurrence }, InputError.STALE)
+            val old = state.intakes.find { it.occurrence.key == occurrence.key }
+            if (old?.status == IntakeStatus.TAKEN) return@withTransaction
+            dao.intake(IntakeRow(occurrence.key, occurrence.seriesId, occurrence.revisionId,
+                occurrence.slotId, occurrence.date.toString(), occurrence.time.toString(), occurrence.name,
+                occurrence.dose.text, occurrence.dose.unit.name, IntakeStatus.TAKEN.name,
+                (old?.plannedAt ?: occurrence.instant(currentZone)).toString(),
+                old?.recordedZoneId ?: currentZone.id, now.toString()))
+        }
+    }
+
     override suspend fun unmark(key: String) {
         database.withTransaction {
-            // Preserve the displayed snapshot even if its series was edited after the mark.
             val old = dao.intakes().find { it.key == key } ?: return@withTransaction
-            dao.exception(old.model().occurrence.row())
-            dao.deleteIntake(key)
+            removeMark(old)
         }
+    }
+
+    override suspend fun unmarkToday(key: String) {
+        database.withTransaction {
+            val today = clock.instant().atZone(zone()).toLocalDate()
+            val old = dao.intakes().find { it.key == key } ?: return@withTransaction
+            checkInput(LocalDate.parse(old.date) == today, InputError.FUTURE)
+            removeMark(old)
+        }
+    }
+
+    private suspend fun removeMark(old: IntakeRow) {
+        // Preserve the displayed snapshot even if its series was edited after the mark.
+        dao.exception(old.model().occurrence.row())
+        dao.deleteIntake(old.key)
     }
 }
 

@@ -9,6 +9,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -26,11 +28,15 @@ import java.util.Calendar
 internal val dateFormat: DateTimeFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy")
 internal val timeFormat: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 
+internal val LocalFormEnabled = staticCompositionLocalOf { true }
+
 @Composable
-internal fun ScreenColumn(padding: PaddingValues, content: @Composable ColumnScope.() -> Unit) {
+internal fun ScreenColumn(padding: PaddingValues, enabled: Boolean = true, content: @Composable ColumnScope.() -> Unit) {
+    CompositionLocalProvider(LocalFormEnabled provides enabled) {
     Column(Modifier.fillMaxSize().padding(padding).imePadding()
         .verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp), content = content)
+    }
 }
 
 @Composable
@@ -42,14 +48,14 @@ internal fun Heading(@StringRes title: Int) {
 @Composable
 internal fun ActionButton(@StringRes title: Int, modifier: Modifier = Modifier,
     enabled: Boolean = true, onClick: () -> Unit) {
-    Button(onClick, modifier.heightIn(min = 56.dp), enabled = enabled) { Text(stringResource(title)) }
+    Button(onClick, modifier.heightIn(min = 56.dp), enabled = enabled && LocalFormEnabled.current) { Text(stringResource(title)) }
 }
 
 @Composable
 internal fun Input(value: String, onChange: (String) -> Unit, @StringRes label: Int,
     keyboard: KeyboardType = KeyboardType.Text, singleLine: Boolean = true) {
     OutlinedTextField(value, onChange, Modifier.fillMaxWidth(), label = { Text(stringResource(label)) },
-        singleLine = singleLine, keyboardOptions = KeyboardOptions(keyboardType = keyboard))
+        enabled = LocalFormEnabled.current, singleLine = singleLine, keyboardOptions = KeyboardOptions(keyboardType = keyboard))
 }
 
 @Composable
@@ -60,7 +66,7 @@ internal fun DateButton(@StringRes label: Int, date: LocalDate, onChange: (Local
             date.year, date.monthValue - 1, date.dayOfMonth).apply {
                 datePicker.firstDayOfWeek = Calendar.MONDAY
             }.show()
-    }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
+    }, enabled = LocalFormEnabled.current, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
         Text(stringResource(R.string.label_value, stringResource(label), date.format(dateFormat)))
     }
 }
@@ -70,7 +76,7 @@ internal fun TimeButton(time: LocalTime, onChange: (LocalTime) -> Unit) {
     val context = LocalContext.current
     OutlinedButton(onClick = {
         TimePickerDialog(context, { _, h, m -> onChange(LocalTime.of(h, m)) }, time.hour, time.minute, true).show()
-    }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
+    }, enabled = LocalFormEnabled.current, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
         Text(stringResource(R.string.label_value, stringResource(R.string.time), time.format(timeFormat)))
     }
 }
@@ -80,7 +86,7 @@ internal fun TimeButton(time: LocalTime, onChange: (LocalTime) -> Unit) {
 internal fun <T> Choices(values: List<T>, selected: T?, label: @Composable (T) -> String, onSelect: (T) -> Unit) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         values.forEach { value ->
-            FilterChip(selected == value, { onSelect(value) }, label = { Text(label(value)) },
+            FilterChip(selected == value, { onSelect(value) }, enabled = LocalFormEnabled.current, label = { Text(label(value)) },
                 modifier = Modifier.heightIn(min = 56.dp))
         }
     }

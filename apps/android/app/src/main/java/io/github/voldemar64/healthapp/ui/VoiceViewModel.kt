@@ -2,6 +2,9 @@ package io.github.voldemar64.healthapp.ui
 
 import android.content.Context
 import android.app.Application
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.createSavedStateHandle
+import androidx.lifecycle.viewmodel.CreationExtras
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -18,30 +21,96 @@ import java.time.ZoneId
 
 data class VoiceUiState(val dialog: DialogState = DialogState(), val active: Boolean = false,
     val status: Int = R.string.voice_ready, val prompt: String = "", val transcript: String = "",
-    val error: String? = null, val destination: String? = null, val finished: Boolean = false)
+    val error: String? = null, val destination: String? = null, val finished: Boolean = false,
+    val saved: Boolean = false, val kind: VoiceKind = VoiceKind.PRESSURE,
+    val pressureForm: VoiceDraft = pressureDraft(), val medicationForm: VoiceDraft = medicationDraft())
 
 class VoiceViewModel(application: Application, private val repository: HealthRepository,
     private val recognizer: VoiceInput = OfflineRecognizer(application),
-    private val output: VoiceOutput = OfflineSpeechOutput(application)) : AndroidViewModel(application) {
+    private val output: VoiceOutput = OfflineSpeechOutput(application),
+    private val savedState: SavedStateHandle = SavedStateHandle()) : AndroidViewModel(application) {
     private var dialog = VoiceDialog()
     private var job: Job? = null
-    private val mutable = MutableStateFlow(VoiceUiState())
+    private val mutable = MutableStateFlow(VoiceUiState(
+        kind = savedState.get<String>("entryKind")?.let(VoiceKind::valueOf) ?: VoiceKind.PRESSURE,
+        pressureForm = savedState.get<ArrayList<String>>("pressureForm")?.let(::decodeDraft) ?: pressureDraft(),
+        medicationForm = savedState.get<ArrayList<String>>("medicationForm")?.let(::decodeDraft) ?: medicationDraft()))
     val state = mutable.asStateFlow()
     private fun text(id: Int, vararg args: Any) = getApplication<Application>().getString(id, *args)
 
+    private var manualChanged = false
+
+    fun initialize(kind: VoiceKind) = selectKind(if (savedState.contains("entryKind")) mutable.value.kind else kind)
+
+    private fun persistForms() {
+        savedState["entryKind"] = mutable.value.kind.name
+        savedState["pressureForm"] = encodeDraft(mutable.value.pressureForm)
+        savedState["medicationForm"] = encodeDraft(mutable.value.medicationForm)
+    }
+
+    fun selectKind(kind: VoiceKind) {
+        if (dialog.state.phase == DialogPhase.COMMIT && job != null) return
+        if (mutable.value.kind == kind && dialog.state.draft != null) return
+        pause()
+        mutable.value = mutable.value.copy(kind = kind)
+        dialog.seed(if (kind == VoiceKind.PRESSURE) mutable.value.pressureForm else mutable.value.medicationForm)
+        mutable.value = mutable.value.copy(dialog = dialog.state)
+        manualChanged = false
+        persistForms()
+    }
+
+    fun updateDraft(draft: VoiceDraft) {
+        if (dialog.state.phase == DialogPhase.COMMIT && job != null) return
+        pause()
+        dialog.seed(draft)
+        publishDraft(draft)
+        manualChanged = true
+    }
+
+    private fun publishDraft(draft: VoiceDraft? = dialog.state.draft) {
+        mutable.value = when (draft?.kind) {
+            VoiceKind.PRESSURE -> mutable.value.copy(pressureForm = draft, kind = draft.kind, dialog = dialog.state)
+            VoiceKind.MEDICATION -> mutable.value.copy(medicationForm = draft, kind = draft.kind, dialog = dialog.state)
+            else -> mutable.value.copy(dialog = dialog.state)
+        }
+        persistForms()
+    }
+
+    private fun listeningContext(): SpeechContext = when (dialog.state.phase) {
+        DialogPhase.CONFIRM -> SpeechContext.CONFIRM
+        DialogPhase.CHOICE -> SpeechContext.CHOICE
+        DialogPhase.CORRECTION -> SpeechContext.CORRECTION
+        DialogPhase.FIELD -> when (dialog.state.field) {
+            VoiceField.SYSTOLIC, VoiceField.DIASTOLIC, VoiceField.PULSE -> SpeechContext.NUMBER
+            VoiceField.TIMES -> SpeechContext.TIME
+            VoiceField.DAYS -> SpeechContext.WEEKDAY
+            VoiceField.UNIT -> SpeechContext.UNIT
+            VoiceField.REPEAT -> SpeechContext.REPEAT
+            else -> SpeechContext.FREE
+        }
+        else -> SpeechContext.FREE
+    }
+
     fun start() {
-        if (job?.isActive == true) return
-        if (mutable.value.finished) dialog = VoiceDialog()
+        if (job != null) return
+        if (mutable.value.saved) return
+        if (mutable.value.finished) dialog.seed(if (mutable.value.kind == VoiceKind.PRESSURE) mutable.value.pressureForm else mutable.value.medicationForm)
         mutable.value = mutable.value.copy(active = true, error = null, finished = false, destination = null)
         job = viewModelScope.launch {
             try {
                 mutable.value = mutable.value.copy(status = R.string.voice_preparing)
                 output.prepare()
                 recognizer.prepare()
+                if (manualChanged || dialog.state.phase == DialogPhase.PAUSED) {
+                    dialog.review(repository.data.first(), Instant.now(), ZoneId.systemDefault())
+                    manualChanged = false
+                    publishDraft()
+                }
                 var silence = 0
                 while (isActive) {
                     mutable.value = mutable.value.copy(dialog = dialog.state)
                     when (dialog.state.phase) {
+                        DialogPhase.PAUSED -> { pause(); return@launch }
                         DialogPhase.CANCELLED -> { say(text(R.string.voice_cancelled)); finish(); return@launch }
                         DialogPhase.NAVIGATE -> {
                             val route = dialog.state.destination!!
@@ -61,27 +130,30 @@ class VoiceViewModel(application: Application, private val repository: HealthRep
                                     IntakeStatus.TAKEN -> R.string.taken; IntakeStatus.SKIPPED -> R.string.skipped; null -> R.string.planned
                                 }))
                             }
-                            dialog = VoiceDialog()
+                            dialog.seed(if (mutable.value.kind == VoiceKind.PRESSURE) mutable.value.pressureForm else mutable.value.medicationForm)
                         }
                         DialogPhase.COMMIT -> {
                             val current = dialog.state
-                            mutable.value = mutable.value.copy(status = R.string.voice_saving)
-                            // A single consumed confirmation owns this write, even if the Activity stops.
-                            withContext(NonCancellable) {
-                                when (current.draft!!.kind) {
-                                    VoiceKind.PRESSURE -> repository.savePressure(current.pressure!!)
-                                    VoiceKind.MEDICATION -> repository.saveSchedule(current.schedule!!)
-                                    VoiceKind.MARK -> {
-                                        val status = IntakeStatus.valueOf(current.draft!!.values[VoiceField.STATUS] ?: "TAKEN")
-                                        repository.mark(current.selected!!, status, if (status == IntakeStatus.TAKEN) Instant.now() else null)
+                            mutable.value = mutable.value.copy(status = R.string.voice_saving,
+                                kind = if (current.draft?.kind == VoiceKind.MARK) VoiceKind.MEDICATION else mutable.value.kind)
+                            var committed = false
+                            try {
+                                // A consumed confirmation owns this write, even if the Activity stops.
+                                withContext(NonCancellable) {
+                                    when (current.draft!!.kind) {
+                                        VoiceKind.PRESSURE -> repository.savePressure(current.pressure!!)
+                                        VoiceKind.MEDICATION -> repository.saveSchedule(current.schedule!!)
+                                        VoiceKind.MARK -> repository.markTakenNow(current.selected!!)
                                     }
+                                    committed = true
+                                    mutable.value = mutable.value.copy(finished = true)
                                 }
-                                mutable.value = mutable.value.copy(finished = true, active = false)
+                                ensureActive()
+                                say(text(R.string.voice_saved))
+                            } finally {
+                                if (committed) mutable.value = mutable.value.copy(saved = true, active = false)
                             }
-                            ensureActive()
-                            say(text(R.string.voice_saved))
-                            dialog = VoiceDialog()
-                            mutable.value = mutable.value.copy(finished = false, active = true)
+                            return@launch
                         }
                         else -> Unit
                     }
@@ -89,15 +161,17 @@ class VoiceViewModel(application: Application, private val repository: HealthRep
                     say(prompt)
                     delay(400)
                     mutable.value = mutable.value.copy(status = R.string.voice_listening, transcript = "")
-                    val heard = recognizer.listen { partial -> mutable.value = mutable.value.copy(transcript = partial) }
+                    val heard = recognizer.listen(listeningContext()) { partial -> mutable.value = mutable.value.copy(transcript = partial) }
                     mutable.value = mutable.value.copy(transcript = heard)
                     if (heard.isBlank()) {
                         silence++
                         if (silence >= 3) { say(text(R.string.voice_silence)); pause(); return@launch }
                         say(text(R.string.voice_retry)); continue
                     }
-                    silence = 0
                     dialog.accept(heard, repository.data.first(), Instant.now(), ZoneId.systemDefault())
+                    publishDraft()
+                    silence = if (dialog.state.error != null) silence + 1 else 0
+                    if (silence >= 3) { say(text(R.string.voice_silence)); pause(); return@launch }
                 }
             } catch (failure: Exception) {
                 if (failure is CancellationException && failure !is TimeoutCancellationException) throw failure
@@ -107,6 +181,7 @@ class VoiceViewModel(application: Application, private val repository: HealthRep
                 if (dialog.state.phase == DialogPhase.COMMIT) mutable.value = mutable.value.copy(finished = true)
             } finally {
                 mutable.value = mutable.value.copy(active = false)
+                job = null
             }
         }
     }
@@ -144,7 +219,7 @@ class VoiceViewModel(application: Application, private val repository: HealthRep
     fun permissionDenied() { mutable.value = mutable.value.copy(error = "PERMISSION") }
 
     private fun occurrenceText(item: Occurrence) = text(R.string.voice_occurrence,
-        item.name, item.date.format(dateFormat), item.time.format(timeFormat), item.dose.text, spokenUnit(item.dose.unit))
+        item.name, item.time.format(timeFormat), item.dose.text, spokenUnit(item.dose.unit))
     private fun spokenUnit(unit: DoseUnit) = text(when (unit) {
         DoseUnit.TABLET -> R.string.voice_tablets; DoseUnit.MG -> R.string.voice_milligrams; DoseUnit.G -> R.string.voice_grams
     })
@@ -154,7 +229,7 @@ class VoiceViewModel(application: Application, private val repository: HealthRep
             "UNKNOWN" -> R.string.voice_unknown
             "FORMAT" -> R.string.voice_format
             "CONFIRM", "CHOICE", "FIELD" -> R.string.voice_retry
-            else -> errorText(it)
+            else -> R.string.voice_format
         }) + " " }.orEmpty()
         return prefix + when (value.phase) {
             DialogPhase.FIELD -> text(fieldPrompt(value.field!!))
@@ -166,26 +241,8 @@ class VoiceViewModel(application: Application, private val repository: HealthRep
             DialogPhase.CHOICE -> text(R.string.voice_choose) + " " + value.choices.mapIndexed { index, item ->
                 text(R.string.voice_choice, index + 1, occurrenceText(item))
             }.joinToString(". ")
-            DialogPhase.CONFIRM -> {
-                val summary = when (value.draft!!.kind) {
-                    VoiceKind.PRESSURE -> value.pressure!!.let {
-                        val local = it.measuredAt.atZone(ZoneId.systemDefault())
-                        text(R.string.voice_pressure_summary, it.systolic, it.diastolic, it.pulse!!,
-                            local.format(dateFormat), local.format(timeFormat))
-                    }
-                    VoiceKind.MEDICATION -> value.schedule!!.let { draft ->
-                        val repeat = text(repeatResource(draft.repeat)) + if (draft.repeat == Repeat.WEEKLY)
-                            ": " + draft.weekdays.sorted().joinToString(", ") { it.getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.forLanguageTag("ru")) } else ""
-                        text(R.string.voice_medication_summary, draft.name,
-                            draft.slots.joinToString("; ") { text(R.string.voice_slot, it.time.format(timeFormat), it.dose.text, spokenUnit(it.dose.unit)) },
-                            repeat, draft.startDate.format(dateFormat), draft.endDate?.format(dateFormat) ?: text(R.string.no_end))
-                    }
-                    VoiceKind.MARK -> text(R.string.voice_mark_summary, occurrenceText(value.selected!!),
-                        text(if (value.draft!!.values[VoiceField.STATUS] == "SKIPPED") R.string.skipped else R.string.taken))
-                }
-                summary + " " + text(R.string.voice_confirm)
-            }
-            else -> text(R.string.voice_intro)
+            DialogPhase.CONFIRM -> text(R.string.voice_confirm)
+            else -> text(if (mutable.value.kind == VoiceKind.PRESSURE) R.string.voice_intro_pressure else R.string.voice_intro_medication)
         }
     }
     override fun onCleared() {
@@ -197,6 +254,9 @@ class VoiceViewModel(application: Application, private val repository: HealthRep
         fun factory(context: Context, repository: HealthRepository): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T = VoiceViewModel(context.applicationContext as Application, repository) as T
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>, extras: CreationExtras): T =
+                VoiceViewModel(context.applicationContext as Application, repository, savedState = extras.createSavedStateHandle()) as T
         }
     }
 }

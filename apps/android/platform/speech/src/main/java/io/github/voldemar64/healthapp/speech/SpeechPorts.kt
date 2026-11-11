@@ -1,8 +1,10 @@
 package io.github.voldemar64.healthapp.speech
 
+enum class SpeechContext { FREE, CONFIRM, NUMBER, TIME, WEEKDAY, CHOICE, CORRECTION, UNIT, REPEAT }
+
 interface VoiceInput {
     suspend fun prepare()
-    suspend fun listen(onPartial: (String) -> Unit): String
+    suspend fun listen(context: SpeechContext = SpeechContext.FREE, onPartial: (String) -> Unit): String
     suspend fun release()
 }
 

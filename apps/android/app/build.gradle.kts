@@ -9,11 +9,13 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "io.github.voldemar64.healthapp"
+        // Isolated emulator package avoids replacing an existing installation with another debug key.
+        applicationId = if (providers.gradleProperty("isolatedTests").orNull == "true")
+            "io.github.voldemar64.healthapp.qa" else "io.github.voldemar64.healthapp"
         minSdk = 29
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.4.0"
         testInstrumentationRunner = "io.github.voldemar64.healthapp.HealthTestRunner"
     }
 

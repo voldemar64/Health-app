@@ -20,87 +20,81 @@ import java.time.ZoneId
 import java.time.format.TextStyle
 import java.util.Locale
 
-private data class DoseDraft(val id: String, val time: String, val amount: String, val unit: String)
-private val doseDraftSaver = listSaver<List<DoseDraft>, String>(
-    save = { slots -> slots.flatMap { listOf(it.id, it.time, it.amount, it.unit) } },
-    restore = { values -> values.chunked(4).map { DoseDraft(it[0], it[1], it[2], it[3]) } },
-)
-
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun MedicationForm(existing: ScheduleRevision?, initialDate: LocalDate, names: List<String>,
     padding: PaddingValues, saving: Boolean, onClose: () -> Unit,
-    header: @Composable ColumnScope.() -> Unit = {},
+    header: @Composable ColumnScope.() -> Unit = {}, sharedDraft: VoiceDraft? = null,
+    onDraft: ((VoiceDraft) -> Unit)? = null,
     onSave: (() -> Pair<ScheduleDraft, LocalDate>) -> Unit) {
-    val draft = existing?.draft
-    var name by rememberSaveable { mutableStateOf(draft?.name ?: "") }
-    var repeat by rememberSaveable { mutableStateOf(draft?.repeat?.name ?: Repeat.DAILY.name) }
-    var mask by rememberSaveable { mutableIntStateOf(draft?.weekdays?.fold(0) { m, d -> m or (1 shl d.ordinal) } ?: 0) }
-    var start by rememberSaveable { mutableStateOf(maxOf(initialDate, LocalDate.now()).toString()) }
-    var hasEnd by rememberSaveable { mutableStateOf(draft?.endDate != null) }
-    var end by rememberSaveable { mutableStateOf(maxOf(draft?.endDate ?: initialDate, LocalDate.parse(start)).toString()) }
-    var slots by rememberSaveable(stateSaver = doseDraftSaver) { mutableStateOf(draft?.slots?.map {
-        DoseDraft(it.id, it.time.toString(), it.dose.text, it.dose.unit.name)
-    } ?: listOf(DoseDraft(newId(), "09:00", "1", "TABLET"))) }
+    var localDraft by rememberLocalDraft { medicationDraft(existing, initialDate) }
+    val draft = sharedDraft ?: localDraft
+    fun change(value: VoiceDraft) { if (onDraft != null) onDraft(value) else localDraft = value }
+    fun update(field: VoiceField, value: String) = change(draft.withValue(field, value))
+    val name = draft.value(VoiceField.NAME)
+    val repeat = draft.value(VoiceField.REPEAT)
+    val days = draft.value(VoiceField.DAYS).split(',').mapNotNull(String::toIntOrNull).toSet()
+    val start = runCatching { LocalDate.parse(draft.value(VoiceField.DATE), dateFormat) }.getOrDefault(LocalDate.now())
+    val end = draft.value(VoiceField.END_DATE)
+    val slots = draft.doses()
     BackHandler { if (!saving) onClose() }
-    ScreenColumn(padding) {
+    ScreenColumn(padding, enabled = !saving) {
         header()
         Heading(if (existing == null) R.string.new_medication else R.string.edit_schedule)
-        Input(name, { name = it }, R.string.medication_name)
+        Input(name, { update(VoiceField.NAME, it) }, R.string.medication_name)
         val suggestions = names.filter { it != name && it.contains(name, ignoreCase = true) }.take(5)
         if (suggestions.isNotEmpty()) {
             Text(stringResource(R.string.previous_names))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 suggestions.forEach { suggestion ->
-                    SuggestionChip({ name = suggestion }, { Text(suggestion) }, Modifier.heightIn(min = 56.dp))
+                    SuggestionChip({ update(VoiceField.NAME, suggestion) }, { Text(suggestion) }, Modifier.heightIn(min = 56.dp), enabled = !saving)
                 }
             }
         }
         Text(stringResource(R.string.repeat))
-        Choices(Repeat.entries, Repeat.valueOf(repeat), { stringResource(repeatResource(it)) }) { repeat = it.name }
+        Choices(Repeat.entries, Repeat.entries.find { it.name == repeat }, { stringResource(repeatResource(it)) }) {
+            change(draft.withValue(VoiceField.REPEAT, it.name).let { d -> if (it == Repeat.ONCE) d.withValue(VoiceField.END_DATE, "") else d })
+        }
         if (repeat == Repeat.WEEKLY.name) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 DayOfWeek.entries.forEach { day ->
-                    FilterChip(mask and (1 shl day.ordinal) != 0,
-                        { mask = mask xor (1 shl day.ordinal) },
-                        { Text(day.getDisplayName(TextStyle.FULL, Locale.forLanguageTag("ru"))) },
-                        Modifier.heightIn(min = 56.dp))
+                    FilterChip(day.value in days,
+                        { update(VoiceField.DAYS, (if (day.value in days) days - day.value else days + day.value).sorted().joinToString(",")) },
+                        { Text(day.getDisplayName(TextStyle.FULL, Locale.forLanguageTag("ru"))) }, Modifier.heightIn(min = 56.dp), enabled = !saving)
                 }
             }
         }
-        DateButton(if (existing == null) R.string.start_date else R.string.change_from, LocalDate.parse(start)) { start = it.toString() }
+        DateButton(if (existing == null) R.string.start_date else R.string.change_from, start) { update(VoiceField.DATE, it.format(dateFormat)) }
         if (existing != null) Text(stringResource(R.string.revision_hint))
         if (repeat != Repeat.ONCE.name) {
-            Choices(listOf(false, true), hasEnd, { stringResource(if (it) R.string.with_end else R.string.no_end) }) { hasEnd = it }
-            if (hasEnd) DateButton(R.string.end_date, LocalDate.parse(end)) { end = it.toString() }
+            Choices(listOf(false, true), end.isNotBlank(), { stringResource(if (it) R.string.with_end else R.string.no_end) }) {
+                update(VoiceField.END_DATE, if (it) start.format(dateFormat) else "")
+            }
+            if (end.isNotBlank()) DateButton(R.string.end_date, runCatching { LocalDate.parse(end, dateFormat) }.getOrDefault(start)) {
+                update(VoiceField.END_DATE, it.format(dateFormat))
+            }
         }
         slots.forEachIndexed { index, slot ->
             key(slot.id) {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(stringResource(R.string.dose_number, index + 1), style = MaterialTheme.typography.titleMedium)
-                        fun update(changed: DoseDraft) {
-                            slots = slots.toMutableList().also { it[index] = changed }
+                        fun changeSlot(changed: VoiceDose) = change(draft.withSlots(slots.toMutableList().also { it[index] = changed }))
+                        TimeButton(runCatching { LocalTime.parse(slot.time) }.getOrDefault(LocalTime.of(9, 0))) {
+                            changeSlot(slot.copy(time = it.toString()))
                         }
-                        TimeButton(LocalTime.parse(slot.time)) { update(slot.copy(time = it.toString())) }
-                        Input(slot.amount, { update(slot.copy(amount = it)) }, R.string.dose, KeyboardType.Decimal)
-                        Choices(DoseUnit.entries, DoseUnit.valueOf(slot.unit), { stringResource(unitResource(it)) }) { update(slot.copy(unit = it.name)) }
-                        if (slots.size > 1) ActionButton(R.string.remove_time) { slots = slots.filterIndexed { i, _ -> i != index } }
+                        Input(slot.amount, { changeSlot(slot.copy(amount = it)) }, R.string.dose, KeyboardType.Decimal)
+                        Choices(DoseUnit.entries, DoseUnit.entries.find { it.name == slot.unit }, { stringResource(unitResource(it)) }) {
+                            changeSlot(slot.copy(unit = it.name))
+                        }
+                        if (slots.size > 1) ActionButton(R.string.remove_time) { change(draft.withSlots(slots.filterIndexed { i, _ -> i != index })) }
                     }
                 }
             }
         }
-        ActionButton(R.string.add_time) { slots = slots + DoseDraft(newId(), "18:00", "1", "TABLET") }
+        ActionButton(R.string.add_time) { change(draft.withSlots(slots + VoiceDose(time = "18:00"))) }
         ActionButton(R.string.save, Modifier.fillMaxWidth(), !saving) {
-            onSave {
-                val date = LocalDate.parse(start)
-                ScheduleDraft(name.trim(), Repeat.valueOf(repeat),
-                    DayOfWeek.entries.filter { mask and (1 shl it.ordinal) != 0 }.toSet(), date,
-                    if (hasEnd && repeat != Repeat.ONCE.name) LocalDate.parse(end) else null,
-                    slots.map { slot ->
-                        DoseTime(slot.id, LocalTime.parse(slot.time), Dose.parse(slot.amount, DoseUnit.valueOf(slot.unit)))
-                    }) to date
-            }
+            onSave { VoiceParser.medication(draft.withSlots(slots), LocalDate.now()) to start }
         }
         ActionButton(R.string.cancel, enabled = !saving, onClick = onClose)
     }
@@ -120,7 +114,7 @@ internal fun OccurrenceForm(item: Occurrence, saving: Boolean, padding: PaddingV
     var dose by rememberSaveable { mutableStateOf(item.dose.text) }
     var unit by rememberSaveable { mutableStateOf(item.dose.unit.name) }
     BackHandler { if (!saving) onClose() }
-    ScreenColumn(padding) {
+    ScreenColumn(padding, enabled = !saving) {
         Heading(R.string.edit_occurrence)
         Text(item.date.format(dateFormat))
         Input(name, { name = it }, R.string.medication_name)
@@ -129,25 +123,6 @@ internal fun OccurrenceForm(item: Occurrence, saving: Boolean, padding: PaddingV
         Choices(DoseUnit.entries, DoseUnit.valueOf(unit), { stringResource(unitResource(it)) }) { unit = it.name }
         ActionButton(R.string.save, Modifier.fillMaxWidth(), !saving) {
             onSave { item.copy(name = name.trim(), time = LocalTime.parse(time), dose = Dose.parse(dose, DoseUnit.valueOf(unit))) }
-        }
-        ActionButton(R.string.cancel, enabled = !saving, onClick = onClose)
-    }
-}
-
-@Composable
-internal fun TakenForm(item: Occurrence, original: Instant?, saving: Boolean, padding: PaddingValues,
-    onClose: () -> Unit, onSave: (Instant) -> Unit) {
-    val initial = remember { (original ?: Instant.now()).atZone(ZoneId.systemDefault()) }
-    var date by rememberSaveable { mutableStateOf(initial.toLocalDate().toString()) }
-    var time by rememberSaveable { mutableStateOf(initial.toLocalTime().withSecond(0).withNano(0).toString()) }
-    BackHandler { if (!saving) onClose() }
-    ScreenColumn(padding) {
-        Heading(R.string.actual_time)
-        Text(item.name)
-        DateButton(R.string.date, LocalDate.parse(date)) { date = it.toString() }
-        TimeButton(LocalTime.parse(time)) { time = it.toString() }
-        ActionButton(R.string.confirm_taken, Modifier.fillMaxWidth(), !saving) {
-            onSave(LocalDate.parse(date).atTime(LocalTime.parse(time)).atZone(ZoneId.systemDefault()).toInstant())
         }
         ActionButton(R.string.cancel, enabled = !saving, onClick = onClose)
     }

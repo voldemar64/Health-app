@@ -6,7 +6,7 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-enum class DialogPhase { COMMAND, FIELD, CONFIRM, CORRECTION, CHOICE, COMMIT, CANCELLED, NAVIGATE, READ }
+enum class DialogPhase { COMMAND, FIELD, CONFIRM, CORRECTION, CHOICE, COMMIT, PAUSED, CANCELLED, NAVIGATE, READ }
 data class DialogState(
     val phase: DialogPhase = DialogPhase.COMMAND,
     val draft: VoiceDraft? = null,
@@ -20,10 +20,12 @@ data class DialogState(
     val schedule: ScheduleDraft? = null,
 )
 
-/** No IO. Only an explicit confirmation can yield COMMIT; repeat confirmations cannot write again. */
+/** No IO. Entries require confirmation; an unambiguous intake is marked immediately. */
 class VoiceDialog {
     var state = DialogState()
         private set
+
+    fun seed(draft: VoiceDraft) { state = DialogState(draft = draft) }
 
     fun edit(field: VoiceField, value: String) {
         val draft = state.draft ?: return
@@ -47,7 +49,8 @@ class VoiceDialog {
             when (text) {
                 "сохранить", "сохрани", "подтверждаю", "подтвердить", "да сохранить", "да" ->
                     state = state.copy(phase = DialogPhase.COMMIT, error = null)
-                "исправить", "исправь", "нет", "изменить" -> state = state.copy(phase = DialogPhase.CORRECTION, error = null)
+                "нет" -> state = state.copy(phase = DialogPhase.PAUSED, error = null)
+                "исправить", "исправь", "изменить" -> state = state.copy(phase = DialogPhase.CORRECTION, error = null)
                 else -> state = state.copy(error = "CONFIRM")
             }
             return
@@ -60,7 +63,7 @@ class VoiceDialog {
             val index = text.removePrefix("номер ").toIntOrNull()?.minus(1)
             val chosen = index?.let { state.choices.getOrNull(it) }
             if (chosen == null) state = state.copy(error = "CHOICE")
-            else state = state.copy(phase = DialogPhase.CONFIRM, selected = chosen, error = null)
+            else state = state.copy(phase = DialogPhase.COMMIT, selected = chosen, error = null)
             return
         }
         if (state.phase == DialogPhase.CORRECTION) {
@@ -83,8 +86,22 @@ class VoiceDialog {
             else state = state.copy(phase = DialogPhase.FIELD, field = field, error = null, selected = null)
             return
         }
+        // Explicit navigation/read/mark commands remain available from either entry form.
+        val explicit = VoiceParser.parse(raw, today)
+        when (explicit) {
+            is VoiceCommand.Navigate -> { state = state.copy(phase = DialogPhase.NAVIGATE, destination = explicit.destination); return }
+            is VoiceCommand.ReadSchedule -> { state = state.copy(phase = DialogPhase.READ, readDate = explicit.date); return }
+            is VoiceCommand.Draft -> if (explicit.value.kind == VoiceKind.MARK) state = DialogState(draft = explicit.value)
+            else -> Unit
+        }
+        if (text.contains("пропус") || text.contains("пропущ")) { state = state.copy(error = "UNKNOWN"); return }
         if (state.draft != null) {
-            state = state.copy(draft = VoiceParser.fill(state.draft!!, raw, today, state.field), error = null)
+            try {
+                state = state.copy(draft = VoiceParser.fill(state.draft!!, raw, today, state.field), error = null)
+            } catch (failure: InvalidInput) {
+                state = state.copy(phase = DialogPhase.FIELD, field = state.field ?: VoiceField.TIMES, error = failure.code.name)
+                return
+            }
             if (state.field != null && state.draft!!.values[state.field].isNullOrBlank()) {
                 state = state.copy(phase = DialogPhase.FIELD, error = "FORMAT")
                 return
@@ -122,7 +139,7 @@ class VoiceDialog {
                 }
                 VoiceKind.MARK -> {
                     val date = draft.values[VoiceField.DATE]?.takeIf(String::isNotBlank)?.let { LocalDate.parse(it, dateFormat) } ?: now.atZone(zone).toLocalDate()
-                    checkInput(date <= now.atZone(zone).toLocalDate(), InputError.FUTURE)
+                    checkInput(date == now.atZone(zone).toLocalDate(), InputError.FUTURE)
                     val name = RussianNumbers.normalize(draft.values[VoiceField.NAME].orEmpty())
                     val times = draft.values[VoiceField.TIMES].orEmpty().split(';').map { it.trim() }
                     val matches = occurrences(data, date, date).filter {
@@ -130,7 +147,7 @@ class VoiceDialog {
                     }
                     state = when (matches.size) {
                         0 -> state.copy(phase = DialogPhase.FIELD, field = VoiceField.NAME, error = "NOT_FOUND")
-                        1 -> state.copy(phase = DialogPhase.CONFIRM, field = null, selected = matches.single())
+                        1 -> state.copy(phase = DialogPhase.COMMIT, field = null, selected = matches.single())
                         else -> state.copy(phase = DialogPhase.CHOICE, field = null, choices = matches)
                     }
                 }

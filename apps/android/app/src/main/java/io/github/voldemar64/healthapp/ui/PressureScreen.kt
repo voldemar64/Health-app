@@ -22,8 +22,6 @@ internal fun PressureScreen(state: HealthState, model: HealthViewModel, padding:
     var editing by rememberSaveable { mutableStateOf<String?>(null) }
     var deleting by rememberSaveable { mutableStateOf<String?>(null) }
     var period by rememberSaveable { mutableIntStateOf(7) }
-    var startText by rememberSaveable { mutableStateOf(LocalDate.now().minusDays(6).toString()) }
-    var endText by rememberSaveable { mutableStateOf(LocalDate.now().toString()) }
     if (editing != null) {
         val existing = state.data.pressures.find { it.id == editing }
         if (editing == "new" || existing != null) {
@@ -33,30 +31,22 @@ internal fun PressureScreen(state: HealthState, model: HealthViewModel, padding:
         }
         return
     }
-    val end = if (period == 0) LocalDate.parse(endText) else LocalDate.now()
-    val start = if (period == 0) LocalDate.parse(startText) else end.minusDays(period.toLong() - 1)
+    val end = state.now.atZone(ZoneId.systemDefault()).toLocalDate()
+    val start = end.minusDays(period.toLong() - 1)
     val list = pressureInRange(state.data.pressures, start, end, ZoneId.systemDefault())
     ScreenColumn(padding) {
         Heading(R.string.pressure_title)
+        Choices(listOf(7, 30), period, { stringResource(if (it == 7) R.string.days_7 else R.string.days_30) }) { period = it }
         if (!state.loaded) Text(stringResource(R.string.loading))
-        else if (state.data.pressures.isEmpty()) EmptyState(R.string.pressure_empty_title, R.string.pressure_empty_body)
         else {
-            Choices(listOf(7, 30, 0), period, { stringResource(when (it) {
-                7 -> R.string.days_7; 30 -> R.string.days_30; else -> R.string.custom_period
-            }) }) { period = it }
-            if (period == 0) {
-                DateButton(R.string.period_start, start) { startText = it.toString() }
-                DateButton(R.string.period_end, end) { endText = it.toString() }
-            }
-            Text(stringResource(R.string.date_range, start.format(dateFormat), end.format(dateFormat)))
-            if (end < start) Text(stringResource(R.string.error_dates), color = MaterialTheme.colorScheme.error)
+            if (state.data.pressures.isEmpty()) EmptyState(R.string.pressure_empty_title, R.string.pressure_empty_body)
             else if (list.isEmpty()) Text(stringResource(R.string.no_measurements_period))
-            else {
-                val summary = summarize(list)!!
-                Text(stringResource(R.string.pressure_average, summary.systolic.roundToInt(),
-                    summary.diastolic.roundToInt(), summary.count))
+            if (list.isNotEmpty()) {
                 MeasurementChart(list, pulse = false)
                 if (list.any { it.pulse != null }) MeasurementChart(list, pulse = true)
+            }
+            if (state.data.pressures.isNotEmpty() || state.data.schedules.isNotEmpty() || state.data.intakes.isNotEmpty()) ReportExport(state.data, period)
+            if (list.isNotEmpty()) {
                 list.asReversed().forEach { item ->
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -85,30 +75,35 @@ internal fun PressureScreen(state: HealthState, model: HealthViewModel, padding:
 
 @Composable
 internal fun PressureForm(existing: PressureMeasurement?, saving: Boolean, padding: PaddingValues,
-    onClose: () -> Unit, header: @Composable ColumnScope.() -> Unit = {}, onSave: (() -> PressureMeasurement) -> Unit) {
-    val local = remember { (existing?.measuredAt ?: Instant.now()).atZone(ZoneId.systemDefault()) }
-    var systolic by rememberSaveable { mutableStateOf(existing?.systolic?.toString() ?: "") }
-    var diastolic by rememberSaveable { mutableStateOf(existing?.diastolic?.toString() ?: "") }
-    var pulse by rememberSaveable { mutableStateOf(existing?.pulse?.toString() ?: "") }
-    var date by rememberSaveable { mutableStateOf(local.toLocalDate().toString()) }
-    var time by rememberSaveable { mutableStateOf(local.toLocalTime().withSecond(0).withNano(0).toString()) }
-    val id = rememberSaveable { existing?.id ?: newId() }
+    onClose: () -> Unit, header: @Composable ColumnScope.() -> Unit = {},
+    sharedDraft: VoiceDraft? = null, onDraft: ((VoiceDraft) -> Unit)? = null,
+    onSave: (() -> PressureMeasurement) -> Unit) {
+    var localDraft by rememberLocalDraft { pressureDraft(existing) }
+    val draft = sharedDraft ?: localDraft
+    fun update(field: VoiceField, value: String) {
+        val changed = draft.withValue(field, value)
+        if (onDraft != null) onDraft(changed) else localDraft = changed
+    }
     BackHandler { if (!saving) onClose() }
-    ScreenColumn(padding) {
+    ScreenColumn(padding, enabled = !saving) {
         header()
         Heading(if (existing == null) R.string.new_pressure else R.string.edit_pressure)
-        Input(systolic, { systolic = it }, R.string.systolic, KeyboardType.Number)
-        Input(diastolic, { diastolic = it }, R.string.diastolic, KeyboardType.Number)
-        Input(pulse, { pulse = it }, R.string.pulse, KeyboardType.Number)
-        DateButton(R.string.date, LocalDate.parse(date)) { date = it.toString() }
-        TimeButton(LocalTime.parse(time)) { time = it.toString() }
+        Input(draft.value(VoiceField.SYSTOLIC), { update(VoiceField.SYSTOLIC, it) }, R.string.systolic, KeyboardType.Number)
+        Input(draft.value(VoiceField.DIASTOLIC), { update(VoiceField.DIASTOLIC, it) }, R.string.diastolic, KeyboardType.Number)
+        Input(draft.value(VoiceField.PULSE), { update(VoiceField.PULSE, it) }, R.string.pulse, KeyboardType.Number)
+        DateButton(R.string.date, runCatching { LocalDate.parse(draft.value(VoiceField.DATE), dateFormat) }.getOrDefault(LocalDate.now())) {
+            update(VoiceField.DATE, it.format(dateFormat))
+        }
+        TimeButton(runCatching { LocalTime.parse(draft.value(VoiceField.TIMES)) }.getOrDefault(LocalTime.now())) {
+            update(VoiceField.TIMES, it.format(timeFormat))
+        }
         ActionButton(R.string.save, Modifier.fillMaxWidth(), !saving) {
             onSave {
-                checkInput(pulse.toIntOrNull() != null, InputError.PULSE)
-                PressureMeasurement(id, systolic.toIntOrNull() ?: 0, diastolic.toIntOrNull() ?: 0,
-                    pulse.takeIf { it.isNotBlank() }?.toIntOrNull(),
-                    LocalDate.parse(date).atTime(LocalTime.parse(time)).atZone(ZoneId.systemDefault()).toInstant(),
-                    ZoneId.systemDefault().id, existing?.note.orEmpty())
+                checkInput(draft.value(VoiceField.PULSE).toIntOrNull() != null, InputError.PULSE)
+                PressureMeasurement(draft.id, draft.value(VoiceField.SYSTOLIC).toIntOrNull() ?: 0,
+                    draft.value(VoiceField.DIASTOLIC).toIntOrNull() ?: 0, draft.value(VoiceField.PULSE).toIntOrNull(),
+                    LocalDate.parse(draft.value(VoiceField.DATE), dateFormat).atTime(LocalTime.parse(draft.value(VoiceField.TIMES)))
+                        .atZone(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault().id, existing?.note.orEmpty())
             }
         }
         ActionButton(R.string.cancel, enabled = !saving, onClick = onClose)

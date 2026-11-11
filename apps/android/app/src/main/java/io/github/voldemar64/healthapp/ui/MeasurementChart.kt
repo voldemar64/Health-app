@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.voldemar64.healthapp.R
 import io.github.voldemar64.healthapp.domain.PressureMeasurement
+import io.github.voldemar64.healthapp.domain.chartData
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -26,14 +27,12 @@ import kotlin.math.floor
 
 @Composable
 internal fun MeasurementChart(measurements: List<PressureMeasurement>, pulse: Boolean) {
-    val items = if (pulse) measurements.filter { it.pulse != null } else measurements
-    if (items.isEmpty()) return
-    val values = items.flatMap { if (pulse) listOf(it.pulse!!) else listOf(it.systolic, it.diastolic) }
-    val bottom = (floor((values.min() - 5) / 20.0) * 20).coerceAtLeast(0.0).toFloat()
-    val top = (ceil((values.max() + 5) / 20.0) * 20).toFloat()
-    val first = items.first().measuredAt.toEpochMilli()
-    val last = items.last().measuredAt.toEpochMilli()
-    val span = (last - first).coerceAtLeast(1)
+    val geometry = chartData(measurements, pulse) ?: return
+    val items = geometry.items
+    val bottom = geometry.bottom
+    val top = geometry.top
+    val first = geometry.first
+    val last = geometry.last
     val title = stringResource(if (pulse) R.string.pulse_chart else R.string.pressure_chart)
     val description = stringResource(if (pulse) R.string.pulse_chart_description else R.string.chart_description)
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.White)) {
@@ -59,8 +58,8 @@ internal fun MeasurementChart(measurements: List<PressureMeasurement>, pulse: Bo
                     drawLine(Color(0xFFE6E6ED), Offset(x, yTop), Offset(x, yBottom), 1.dp.toPx(), pathEffect = dash)
                 }
                 fun point(item: PressureMeasurement, value: Int) = Offset(
-                    if (first == last) (left + right) / 2 else left + (item.measuredAt.toEpochMilli() - first).toFloat() / span * (right - left),
-                    yBottom - (value - bottom) / (top - bottom) * (yBottom - yTop))
+                    left + geometry.x(item) * (right - left),
+                    yBottom - geometry.y(value) * (yBottom - yTop))
                 val series = if (pulse) listOf(Color(0xFF8462AC) to items.map { it.pulse!! }) else
                     listOf(Color(0xFF6683CB) to items.map { it.systolic }, Color(0xFFA47B00) to items.map { it.diastolic })
                 series.forEach { (color, numbers) ->

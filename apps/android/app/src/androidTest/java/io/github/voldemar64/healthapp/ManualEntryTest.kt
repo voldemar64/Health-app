@@ -57,8 +57,9 @@ class ManualEntryTest {
         compose.onNodeWithText("Закрыть").performClick()
         compose.onNode(hasText("Лекарства") and hasClickAction()).performScrollTo().performClick()
         compose.onNodeWithText("Новое лекарство").assertExists()
-        click("Голосовой ввод")
-        compose.onNodeWithText("Начать / продолжить разговор").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Голосовой ввод").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Название лекарства").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Начать / продолжить разговор").assertDoesNotExist()
         runBlocking { assertTrue(app.repository.data.first().pressures.isEmpty()) }
     }
 
@@ -86,7 +87,9 @@ class ManualEntryTest {
         compose.onNodeWithText("120").assertExists()
         click("Сохранить")
         waitText("120/80 мм рт. ст.")
-        compose.onNodeWithText("Среднее: 120/80 мм рт. ст.\nИзмерений: 1").assertExists()
+        compose.onNodeWithText("Среднее:", substring = true).assertDoesNotExist()
+        compose.onNodeWithText("Выгрузить PDF").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Период").assertDoesNotExist()
         compose.activityRule.scenario.recreate()
         waitText("120/80 мм рт. ст.")
         click("Изменить")
@@ -122,7 +125,9 @@ class ManualEntryTest {
         compose.activityRule.scenario.recreate()
         compose.onNodeWithText("0,5").assertExists()
         click("Сохранить")
-        waitText("Расписание: Тестовое лекарство")
+        compose.onNodeWithContentDescription("Все лекарства").performClick()
+        waitText("Тестовое лекарство")
+        click("Назад")
         runBlocking {
             val draft = app.repository.data.first().schedules.single().draft
             assertEquals(setOf(DayOfWeek.MONDAY, DayOfWeek.THURSDAY), draft.weekdays)
@@ -134,7 +139,7 @@ class ManualEntryTest {
         compose.onNode(hasText("Месяц") and hasClickAction()).assertIsSelected()
     }
 
-    @Test fun takenSkippedUndoAndFutureSingleEditUseRealStorage() {
+    @Test fun takenNowUndoAndFutureSingleEditUseRealStorage() {
         val today = LocalDate.now()
         runBlocking {
             app.repository.saveSchedule(ScheduleDraft("Тест", Repeat.DAILY, emptySet(), today, null,
@@ -142,14 +147,22 @@ class ManualEntryTest {
         }
         click("Лекарства")
         waitText("Тест")
+        val before = Instant.now()
         click("Принято")
-        click("Подтвердить приём")
-        waitText("Изменить фактическое время")
-        click("Пропущено")
-        compose.waitUntil(10_000) { runBlocking { app.repository.data.first().intakes.singleOrNull()?.status == IntakeStatus.SKIPPED } }
+        waitText("✓ Принято")
+        compose.onNodeWithText("Подтвердить приём").assertDoesNotExist()
+        compose.onNodeWithText("Пропущено").assertDoesNotExist()
+        runBlocking { assertTrue(app.repository.data.first().intakes.single().takenAt!! >= before) }
+        compose.onNodeWithContentDescription("Все лекарства").performScrollTo().performClick()
+        click("Тест")
         click("Отменить отметку")
         compose.waitUntil(10_000) { runBlocking { app.repository.data.first().intakes.isEmpty() } }
-        click("Вперёд")
+        click("Назад")
+        click("Назад")
+        compose.onNodeWithContentDescription("Следующий период").performScrollTo().performClick()
+        compose.onNodeWithText("Принято").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Все лекарства").performScrollTo().performClick()
+        click("Тест")
         click("Изменить только этот приём")
         type("Количество", "0,25")
         click("Сохранить")
@@ -177,10 +190,15 @@ class ManualEntryTest {
             compose.activityRule.scenario.recreate()
             compose.onNodeWithText("Приём 2").performScrollTo().assertIsDisplayed()
             click("Сохранить")
-            waitText("Расписание: Две дозы")
+            compose.onNodeWithContentDescription("Все лекарства").performScrollTo().performClick()
+            waitText("Две дозы")
+            click("Назад")
             runBlocking { assertEquals(2, app.repository.data.first().schedules.single().draft.slots.size) }
             click("Месяц")
-            compose.onNodeWithText("Все расписания").performScrollTo().assertIsDisplayed()
+            compose.onNodeWithContentDescription("Все лекарства").performScrollTo().assertIsDisplayed()
+            val screenshot = compose.onRoot().captureToImage().asAndroidBitmap()
+            java.io.File(app.cacheDir, "calendar-large.png").outputStream().use { screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+            screenshot.recycle()
         } finally {
             shell(if (original == "null" || original.isBlank()) "settings delete system font_scale"
                 else "settings put system font_scale $original")

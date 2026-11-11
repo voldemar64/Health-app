@@ -82,11 +82,105 @@ class VoiceDialogTest {
         assertEquals(DialogPhase.CHOICE, dialog.state.phase)
         dialog.say("номер два", data)
         assertEquals(LocalTime.of(18, 0), dialog.state.selected!!.time)
-        assertEquals(DialogPhase.CONFIRM, dialog.state.phase)
+        assertEquals(DialogPhase.COMMIT, dialog.state.phase)
         val other = VoiceDialog()
         other.say("принял тестал", data)
         assertEquals("NOT_FOUND", other.state.error)
         assertNull(other.state.selected)
+    }
+
+    @Test fun seededPressureAcceptsValuesWithoutCommandKeyword() {
+        val dialog = VoiceDialog()
+        dialog.seed(VoiceDraft(VoiceKind.PRESSURE))
+        dialog.say("сто двадцать на восемьдесят пульс шестьдесят пять")
+        assertEquals(DialogPhase.CONFIRM, dialog.state.phase)
+        assertEquals(120, dialog.state.pressure!!.systolic)
+        assertEquals(80, dialog.state.pressure!!.diastolic)
+        assertEquals(65, dialog.state.pressure!!.pulse)
+    }
+
+    @Test fun noPausesAndRetainsDraftInsteadOfSavingOrClearing() {
+        val dialog = VoiceDialog()
+        dialog.say("давление 120 на 80 пульс 65")
+        val original = dialog.state
+        dialog.say("нет")
+        assertEquals(DialogPhase.PAUSED, dialog.state.phase)
+        assertEquals(original.draft, dialog.state.draft)
+        assertEquals(original.pressure, dialog.state.pressure)
+        dialog.review(HealthData(), now, zone)
+        assertEquals(DialogPhase.CONFIRM, dialog.state.phase)
+    }
+
+    @Test fun confirmationRequiresWholeAnswerNotEmbeddedYes() {
+        val dialog = VoiceDialog()
+        dialog.say("давление 120 на 80 пульс 65")
+        listOf("не надо", "да но исправить", "да позже", "[unk]", "").forEach { answer ->
+            dialog.say(answer)
+            assertEquals(answer, DialogPhase.CONFIRM, dialog.state.phase)
+            assertEquals("CONFIRM", dialog.state.error)
+        }
+        dialog.say("Да.")
+        assertEquals(DialogPhase.COMMIT, dialog.state.phase)
+        val committed = dialog.state
+        dialog.say("да")
+        assertSame(committed, dialog.state)
+    }
+
+    @Test fun directIntakeCommitsTodayOnlyAndSkippedIsRejected() {
+        val schedule = ScheduleDraft("Тестол", Repeat.DAILY, emptySet(), today.minusDays(1), null,
+            listOf(DoseTime(time = LocalTime.of(9, 0), dose = Dose.parse("1", DoseUnit.TABLET))))
+        val data = HealthData(schedules = listOf(ScheduleRevision(from = today.minusDays(1).atStartOfDay(), draft = schedule)))
+        val dialog = VoiceDialog()
+        dialog.say("принял тестол", data)
+        assertEquals(DialogPhase.COMMIT, dialog.state.phase)
+        assertEquals(today, dialog.state.selected!!.date)
+        listOf("вчера", "завтра").forEach { date ->
+            val historical = VoiceDialog()
+            historical.say("принял тестол $date", data)
+            assertNotEquals(DialogPhase.COMMIT, historical.state.phase)
+            assertEquals("FUTURE", historical.state.error)
+        }
+        val skipped = VoiceDialog()
+        skipped.say("пропустил тестол", data)
+        assertEquals("UNKNOWN", skipped.state.error)
+        assertNotEquals(DialogPhase.COMMIT, skipped.state.phase)
+    }
+
+    @Test fun unrelatedSpeechCorrectionKeepsManualPerSlotDoses() {
+        val slots = listOf(VoiceDose("morning", "09:00", "0.5", "TABLET"),
+            VoiceDose("evening", "18:00", "5", "MG"))
+        val draft = VoiceDraft(VoiceKind.MEDICATION, mapOf(
+            VoiceField.NAME to "Тестол", VoiceField.AMOUNT to "0.5", VoiceField.UNIT to "TABLET",
+            VoiceField.TIMES to "09:00;18:00", VoiceField.REPEAT to "DAILY"), slots = slots)
+        val dialog = VoiceDialog()
+        dialog.seed(draft)
+        dialog.review(HealthData(), now, zone)
+        dialog.say("исправить")
+        dialog.say("повтор")
+        dialog.say("по понедельникам и четвергам")
+        assertEquals(DialogPhase.CONFIRM, dialog.state.phase)
+        assertEquals(slots, dialog.state.draft!!.slots)
+        assertEquals(Repeat.WEEKLY, dialog.state.schedule!!.repeat)
+        assertEquals(listOf("0.5", "5"), dialog.state.schedule!!.slots.map { it.dose.text })
+        assertEquals(listOf(DoseUnit.TABLET, DoseUnit.MG), dialog.state.schedule!!.slots.map { it.dose.unit })
+        assertEquals(listOf("morning", "evening"), dialog.state.schedule!!.slots.map { it.id })
+    }
+
+    @Test fun changingTimesPreservesDifferentDosesAndRejectsAmbiguousSlotCount() {
+        val slots = listOf(VoiceDose("am", "09:00", "0.5", "TABLET"), VoiceDose("pm", "18:00", "1", "TABLET"))
+        val draft = VoiceDraft(VoiceKind.MEDICATION, mapOf(VoiceField.NAME to "Тест",
+            VoiceField.AMOUNT to "0.5", VoiceField.UNIT to "TABLET", VoiceField.TIMES to "09:00;18:00", VoiceField.REPEAT to "DAILY"), slots = slots)
+        val dialog = VoiceDialog()
+        dialog.seed(draft)
+        dialog.review(HealthData(), now, zone)
+        dialog.say("исправить"); dialog.say("время"); dialog.say("в десять и в девятнадцать")
+        assertEquals(DialogPhase.CONFIRM, dialog.state.phase)
+        assertEquals(listOf("0.5", "1"), dialog.state.schedule!!.slots.map { it.dose.text })
+        assertEquals(listOf(LocalTime.of(10, 0), LocalTime.of(19, 0)), dialog.state.schedule!!.slots.map { it.time })
+        dialog.say("исправить"); dialog.say("время"); dialog.say("в десять")
+        assertEquals(DialogPhase.FIELD, dialog.state.phase)
+        assertEquals("TIMES", dialog.state.error)
+        assertEquals(listOf("0.5", "1"), dialog.state.draft!!.slots!!.map { it.amount })
     }
 
     @Test fun manualCorrectionRequiresFreshReviewAndConfirmation() {
