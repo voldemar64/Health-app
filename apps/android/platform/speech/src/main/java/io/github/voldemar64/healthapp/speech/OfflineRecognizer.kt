@@ -105,7 +105,8 @@ class OfflineRecognizer(private val context: Context) : VoiceInput {
     }
 
     /** Used by instrumentation to exercise the native model with deterministic PCM fixtures. */
-    suspend fun transcribe(samples: ShortArray, context: SpeechContext = SpeechContext.FREE): String = withContext(Dispatchers.IO) {
+    suspend fun transcribe(samples: ShortArray, context: SpeechContext = SpeechContext.FREE,
+        stopAtEndpoint: Boolean = false): String = withContext(Dispatchers.IO) {
         lock.withLock {
             prepareLocked()
             createRecognizer(context).use { recognizer ->
@@ -116,7 +117,9 @@ class OfflineRecognizer(private val context: Context) : VoiceInput {
                 while (offset < samples.size) {
                     val frame = samples.copyOfRange(offset, minOf(offset + 1600, samples.size))
                     if (recognizer.acceptWaveForm(frame, frame.size)) {
-                        segments += JSONObject(recognizer.result).optString("text")
+                        val text = JSONObject(recognizer.result).optString("text")
+                        if (stopAtEndpoint && text.isNotBlank()) return@withLock text
+                        segments += text
                     }
                     offset += frame.size
                 }
@@ -127,15 +130,28 @@ class OfflineRecognizer(private val context: Context) : VoiceInput {
     }
 
     private fun createRecognizer(context: SpeechContext): Recognizer {
-        val phrases = context.phrases() ?: return Recognizer(model, 16000f)
-        return Recognizer(model, 16000f, JSONArray(phrases).toString())
+        val phrases = context.phrases()
+        val recognizer = if (phrases == null) Recognizer(model, 16000f)
+            else Recognizer(model, 16000f, JSONArray(phrases).toString())
+        try {
+            if (context == SpeechContext.PRESSURE || context == SpeechContext.FREE) {
+                // Keep natural pauses inside measurements and medication schedules.
+                // Vosk's trailing-silence rules become 2.5/3.0/3.5 s; short replies
+                // retain their default endpoint rules. listen() still caps a turn at 25 s.
+                recognizer.setEndpointerDelays(25f, 2.5f, 25f)
+            }
+            return recognizer
+        } catch (failure: Exception) {
+            recognizer.close()
+            throw failure
+        }
     }
 
     override suspend fun release() = withContext(Dispatchers.IO) { lock.withLock { model?.close(); model = null } }
     private companion object { val installationLock = Any() }
 }
 
-/** Restrict only closed answers. Names and complete commands keep the model's full vocabulary. */
+/** Pressure entry and closed answers use their own vocabulary; medication names remain free. */
 internal fun SpeechContext.phrases(): List<String>? {
     val numbers = ("ноль нуль один одна одну два две три четыре пять шесть семь восемь девять десять " +
         "одиннадцать двенадцать тринадцать четырнадцать пятнадцать шестнадцать семнадцать восемнадцать девятнадцать " +
@@ -145,8 +161,14 @@ internal fun SpeechContext.phrases(): List<String>? {
         "грамм", "грамма", "граммов")
     val vocabulary = when (this) {
         SpeechContext.FREE -> return null
+        SpeechContext.PRESSURE -> numbers + listOf("давление", "измерение", "запиши", "записать", "добавь", "добавить",
+            "на", "пульс", "сердцебиение", "верхнее", "нижнее", "и", "у", "меня", "пожалуйста",
+            "сегодня", "вчера", "позавчера", "в", "утра", "дня", "вечера", "ночи", "час", "часа", "часов", "минут",
+            "открой давление", "открой лекарства", "открой календарь", "покажи статистику",
+            "прочитай расписание на сегодня", "прочитай расписание на завтра")
         SpeechContext.CONFIRM -> listOf("да", "нет", "исправить")
-        SpeechContext.NUMBER -> numbers + units + listOf("половина", "половину", "полтаблетки", "четверть",
+        SpeechContext.PRESSURE_NUMBER -> numbers
+        SpeechContext.DOSE -> numbers + units + listOf("половина", "половину", "полтаблетки", "четверть",
             "полтора", "полторы", "целых", "целая", "десятых", "десятая", "запятая", "точка", "с половиной")
         SpeechContext.TIME -> numbers + listOf("в", "и", "утра", "утром", "дня", "днем", "вечера", "вечером",
             "ночи", "ночью", "час", "часа", "часов", "минут", "минута", "минуты")

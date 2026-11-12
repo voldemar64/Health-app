@@ -51,6 +51,23 @@ class SpeechTest {
                 offset += 8 + length + length % 2
             }
             assertTrue(samples.isNotEmpty())
+            // This fixture has a pause between pressure and pulse. Replay the live
+            // first-endpoint behavior, not only batch transcription of all segments.
+            // Insert another 0.8 s into the existing silence at 4 s, before "пульс".
+            val paused = samples.copyOfRange(0, 64000) + ShortArray(12800) + samples.copyOfRange(64000, samples.size)
+            for (context in listOf(SpeechContext.FREE, SpeechContext.PRESSURE)) {
+                for (audio in listOf(samples, paused)) {
+                    // A second utterance after 4 s of silence must not enter this turn.
+                    val liveResult = recognizer.transcribe(audio + ShortArray(64000) + samples,
+                        context, stopAtEndpoint = true)
+                    val liveDraft = VoiceParser.fill(VoiceDraft(VoiceKind.PRESSURE), liveResult, LocalDate.now())
+                    assertEquals("$context streaming: $liveResult", "120", liveDraft.values[VoiceField.SYSTOLIC])
+                    assertEquals("$context streaming: $liveResult", "80", liveDraft.values[VoiceField.DIASTOLIC])
+                    assertEquals("$context streaming: $liveResult", "65", liveDraft.values[VoiceField.PULSE])
+                    assertEquals("Must stop before next utterance: $liveResult", 1,
+                        Regex("\\bпульс\\b").findAll(liveResult).count())
+                }
+            }
             repeat(3) {
                 val result = recognizer.transcribe(samples)
                 val dialog = VoiceDialog()
@@ -83,6 +100,7 @@ class SpeechTest {
         try {
             input.commands.send("запиши давление 120 на 80 пульс 65")
             await { model.state.value.status == R.string.voice_listening && model.state.value.dialog.phase == DialogPhase.CONFIRM }
+            assertEquals(SpeechContext.PRESSURE, input.contexts.first())
             assertTrue(output.spoken.contains("Данные верны? Да, нет или исправить."))
             assertFalse(output.spoken.any { it.contains("120") || it.contains("65") })
             assertEquals(SpeechContext.CONFIRM, input.contexts.last())

@@ -14,8 +14,8 @@ android {
             "io.github.voldemar64.healthapp.qa" else "io.github.voldemar64.healthapp"
         minSdk = 29
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.4.0"
+        versionCode = 5
+        versionName = "0.4.1"
         testInstrumentationRunner = "io.github.voldemar64.healthapp.HealthTestRunner"
     }
 

@@ -90,4 +90,5 @@ dependencies {
     implementation(libs.coroutines.core)
     implementation(libs.vosk.android) { artifact { type = "aar" } }
     implementation(libs.jna) { artifact { type = "aar" } }
+    testImplementation(libs.junit)
 }
