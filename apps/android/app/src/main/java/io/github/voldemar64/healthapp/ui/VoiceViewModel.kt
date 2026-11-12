@@ -76,21 +76,6 @@ class VoiceViewModel(application: Application, private val repository: HealthRep
         persistForms()
     }
 
-    private fun listeningContext(): SpeechContext = when (dialog.state.phase) {
-        DialogPhase.CONFIRM -> SpeechContext.CONFIRM
-        DialogPhase.CHOICE -> SpeechContext.CHOICE
-        DialogPhase.CORRECTION -> SpeechContext.CORRECTION
-        DialogPhase.FIELD -> when (dialog.state.field) {
-            VoiceField.SYSTOLIC, VoiceField.DIASTOLIC, VoiceField.PULSE -> SpeechContext.NUMBER
-            VoiceField.TIMES -> SpeechContext.TIME
-            VoiceField.DAYS -> SpeechContext.WEEKDAY
-            VoiceField.UNIT -> SpeechContext.UNIT
-            VoiceField.REPEAT -> SpeechContext.REPEAT
-            else -> SpeechContext.FREE
-        }
-        else -> SpeechContext.FREE
-    }
-
     fun start() {
         if (job != null) return
         if (mutable.value.saved) return
@@ -161,7 +146,7 @@ class VoiceViewModel(application: Application, private val repository: HealthRep
                     say(prompt)
                     delay(400)
                     mutable.value = mutable.value.copy(status = R.string.voice_listening, transcript = "")
-                    val heard = recognizer.listen(listeningContext()) { partial -> mutable.value = mutable.value.copy(transcript = partial) }
+                    val heard = recognizer.listen(listeningContext(dialog.state, mutable.value.kind)) { partial -> mutable.value = mutable.value.copy(transcript = partial) }
                     mutable.value = mutable.value.copy(transcript = heard)
                     if (heard.isBlank()) {
                         silence++
@@ -259,6 +244,23 @@ class VoiceViewModel(application: Application, private val repository: HealthRep
                 VoiceViewModel(context.applicationContext as Application, repository, savedState = extras.createSavedStateHandle()) as T
         }
     }
+}
+
+internal fun listeningContext(state: DialogState, kind: VoiceKind): SpeechContext = when (state.phase) {
+    DialogPhase.CONFIRM -> SpeechContext.CONFIRM
+    DialogPhase.CHOICE -> SpeechContext.CHOICE
+    DialogPhase.CORRECTION -> SpeechContext.CORRECTION
+    DialogPhase.FIELD -> when (state.field) {
+        VoiceField.SYSTOLIC, VoiceField.DIASTOLIC, VoiceField.PULSE -> SpeechContext.PRESSURE_NUMBER
+        VoiceField.AMOUNT -> SpeechContext.DOSE
+        VoiceField.TIMES -> SpeechContext.TIME
+        VoiceField.DAYS -> SpeechContext.WEEKDAY
+        VoiceField.UNIT -> SpeechContext.UNIT
+        VoiceField.REPEAT -> SpeechContext.REPEAT
+        else -> SpeechContext.FREE
+    }
+    DialogPhase.COMMAND -> if (kind == VoiceKind.PRESSURE) SpeechContext.PRESSURE else SpeechContext.FREE
+    else -> SpeechContext.FREE
 }
 
 internal fun fieldPrompt(field: VoiceField) = when (field) {
