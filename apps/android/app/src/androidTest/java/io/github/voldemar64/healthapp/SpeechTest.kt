@@ -98,12 +98,14 @@ class SpeechTest {
             VoiceViewModel(app, app.repository, input, output).also { store.put("voice", it); it.start() }
         }
         try {
+            input.commands.send("1")
             input.commands.send("запиши давление 120 на 80 пульс 65")
             await { model.state.value.status == R.string.voice_listening && model.state.value.dialog.phase == DialogPhase.CONFIRM }
-            assertEquals(SpeechContext.PRESSURE, input.contexts.first())
-            assertTrue(output.spoken.contains("Данные верны? Да, нет или исправить."))
-            assertFalse(output.spoken.any { it.contains("120") || it.contains("65") })
-            assertEquals(SpeechContext.CONFIRM, input.contexts.last())
+            assertEquals(SpeechContext.FREE, input.contexts.first())
+            assertEquals(SpeechContext.PRESSURE, input.contexts[1])
+            assertTrue(output.spoken.any { it.contains("Данные верны? Да, нет или исправить.") })
+            assertTrue(output.spoken.any { it.contains("120") && it.contains("65") })
+            assertEquals(SpeechContext.FREE, input.contexts.last())
             assertTrue(app.repository.data.first().pressures.isEmpty())
             withContext(Dispatchers.Main) { model.pause() }
             await { !input.listening }
@@ -132,6 +134,7 @@ class SpeechTest {
             }
         }
         try {
+            input.commands.send("1")
             input.commands.send("120 на 80 пульс 65")
             await { model.state.value.dialog.phase == DialogPhase.CONFIRM && input.listening }
             input.commands.send("нет")
@@ -166,6 +169,7 @@ class SpeechTest {
             VoiceViewModel(app, repository, input, FakeOutput { input.listening }).also { store.put("voice", it); it.start() }
         }
         try {
+            input.commands.send("1")
             input.commands.send("давление 120 на 80 пульс 65"); input.commands.send("да")
             withTimeout(15000) { entered.await() }
             withContext(Dispatchers.Main) {

@@ -20,7 +20,7 @@ class HealthRulesTest {
     }
 
     @Test fun validatesPressureWithoutApplyingDiagnosticThresholds() {
-        assertThrows(InvalidInput::class.java) { PressureMeasurement(systolic = 80, diastolic = 120, pulse = null, measuredAt = Instant.EPOCH, recordedZoneId = "UTC") }
+        assertEquals(80, PressureMeasurement(systolic = 80, diastolic = 120, pulse = null, measuredAt = Instant.EPOCH, recordedZoneId = "UTC").systolic)
         assertThrows(InvalidInput::class.java) { PressureMeasurement(systolic = 120, diastolic = 80, pulse = 0, measuredAt = Instant.EPOCH, recordedZoneId = "UTC") }
         assertEquals(null, PressureMeasurement(systolic = 120, diastolic = 80, pulse = null, measuredAt = Instant.EPOCH, recordedZoneId = "UTC").pulse)
     }

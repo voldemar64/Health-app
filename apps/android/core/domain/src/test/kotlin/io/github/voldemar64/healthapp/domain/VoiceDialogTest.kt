@@ -28,11 +28,13 @@ class VoiceDialogTest {
         }
     }
 
-    @Test fun missingPulseIsAskedAndCorrectionIsReadAgain() {
+    @Test fun optionalPulseCanBeAddedDuringCorrection() {
         val dialog = VoiceDialog()
         dialog.say("давление 120 на 80")
-        assertEquals(VoiceField.PULSE, dialog.state.field)
-        dialog.say("шестьдесят")
+        assertEquals(DialogPhase.CONFIRM, dialog.state.phase)
+        assertNull(dialog.state.pressure!!.pulse)
+        dialog.say("исправь пульс на семьдесят пять")
+        assertEquals(75, dialog.state.pressure!!.pulse)
         assertEquals(DialogPhase.CONFIRM, dialog.state.phase)
         dialog.say("исправить")
         dialog.say("пульс")
@@ -49,6 +51,9 @@ class VoiceDialogTest {
     @Test fun medicationSupportsFractionsMultipleTimesAndWeeklyInflections() {
         val dialog = VoiceDialog()
         dialog.say("добавь лекарство тестол половину таблетки в девять тридцать и в восемь вечера по понедельникам и четвергам")
+        dialog.say("таблетка")
+        dialog.say("не знаю")
+        dialog.say("не знаю")
         assertEquals(DialogPhase.CONFIRM, dialog.state.phase)
         val draft = dialog.state.schedule!!
         assertEquals("тестол", draft.name)
@@ -67,6 +72,9 @@ class VoiceDialogTest {
         dialog.say("один раз в неделю")
         assertEquals(VoiceField.DAYS, dialog.state.field)
         dialog.say("по средам")
+        dialog.say("раствор")
+        dialog.say("не знаю")
+        dialog.say("не знаю")
         assertEquals(Repeat.WEEKLY, dialog.state.schedule!!.repeat)
         assertEquals("Новое название", dialog.state.schedule!!.name)
     }
@@ -82,6 +90,8 @@ class VoiceDialogTest {
         assertEquals(DialogPhase.CHOICE, dialog.state.phase)
         dialog.say("номер два", data)
         assertEquals(LocalTime.of(18, 0), dialog.state.selected!!.time)
+        assertEquals(DialogPhase.CONFIRM, dialog.state.phase)
+        dialog.say("да", data)
         assertEquals(DialogPhase.COMMIT, dialog.state.phase)
         val other = VoiceDialog()
         other.say("принял тестал", data)
@@ -126,12 +136,14 @@ class VoiceDialogTest {
         assertSame(committed, dialog.state)
     }
 
-    @Test fun directIntakeCommitsTodayOnlyAndSkippedIsRejected() {
+    @Test fun directIntakeAndSkipRequireConfirmationToday() {
         val schedule = ScheduleDraft("Тестол", Repeat.DAILY, emptySet(), today.minusDays(1), null,
             listOf(DoseTime(time = LocalTime.of(9, 0), dose = Dose.parse("1", DoseUnit.TABLET))))
         val data = HealthData(schedules = listOf(ScheduleRevision(from = today.minusDays(1).atStartOfDay(), draft = schedule)))
         val dialog = VoiceDialog()
         dialog.say("принял тестол", data)
+        assertEquals(DialogPhase.CONFIRM, dialog.state.phase)
+        dialog.say("да", data)
         assertEquals(DialogPhase.COMMIT, dialog.state.phase)
         assertEquals(today, dialog.state.selected!!.date)
         listOf("вчера", "завтра").forEach { date ->
@@ -142,16 +154,19 @@ class VoiceDialogTest {
         }
         val skipped = VoiceDialog()
         skipped.say("пропустил тестол", data)
-        assertEquals("UNKNOWN", skipped.state.error)
-        assertNotEquals(DialogPhase.COMMIT, skipped.state.phase)
+        assertEquals(DialogPhase.CONFIRM, skipped.state.phase)
+        assertEquals("SKIPPED", skipped.state.draft?.values?.get(VoiceField.STATUS))
+        skipped.say("да", data)
+        assertEquals(DialogPhase.COMMIT, skipped.state.phase)
     }
 
     @Test fun unrelatedSpeechCorrectionKeepsManualPerSlotDoses() {
         val slots = listOf(VoiceDose("morning", "09:00", "0.5", "TABLET"),
-            VoiceDose("evening", "18:00", "5", "MG"))
+            VoiceDose("evening", "18:00", "5", "TABLET"))
         val draft = VoiceDraft(VoiceKind.MEDICATION, mapOf(
             VoiceField.NAME to "Тестол", VoiceField.AMOUNT to "0.5", VoiceField.UNIT to "TABLET",
-            VoiceField.TIMES to "09:00;18:00", VoiceField.REPEAT to "DAILY"), slots = slots)
+            VoiceField.TIMES to "09:00;18:00", VoiceField.REPEAT to "DAILY",
+            VoiceField.FORM to "таблетка", VoiceField.STRENGTH to "UNKNOWN", VoiceField.STOCK to "UNKNOWN"), slots = slots)
         val dialog = VoiceDialog()
         dialog.seed(draft)
         dialog.review(HealthData(), now, zone)
@@ -162,14 +177,15 @@ class VoiceDialogTest {
         assertEquals(slots, dialog.state.draft!!.slots)
         assertEquals(Repeat.WEEKLY, dialog.state.schedule!!.repeat)
         assertEquals(listOf("0.5", "5"), dialog.state.schedule!!.slots.map { it.dose.text })
-        assertEquals(listOf(DoseUnit.TABLET, DoseUnit.MG), dialog.state.schedule!!.slots.map { it.dose.unit })
+        assertEquals(listOf(DoseUnit.TABLET, DoseUnit.TABLET), dialog.state.schedule!!.slots.map { it.dose.unit })
         assertEquals(listOf("morning", "evening"), dialog.state.schedule!!.slots.map { it.id })
     }
 
     @Test fun changingTimesPreservesDifferentDosesAndRejectsAmbiguousSlotCount() {
         val slots = listOf(VoiceDose("am", "09:00", "0.5", "TABLET"), VoiceDose("pm", "18:00", "1", "TABLET"))
         val draft = VoiceDraft(VoiceKind.MEDICATION, mapOf(VoiceField.NAME to "Тест",
-            VoiceField.AMOUNT to "0.5", VoiceField.UNIT to "TABLET", VoiceField.TIMES to "09:00;18:00", VoiceField.REPEAT to "DAILY"), slots = slots)
+            VoiceField.AMOUNT to "0.5", VoiceField.UNIT to "TABLET", VoiceField.TIMES to "09:00;18:00", VoiceField.REPEAT to "DAILY",
+            VoiceField.FORM to "таблетка", VoiceField.STRENGTH to "UNKNOWN", VoiceField.STOCK to "UNKNOWN"), slots = slots)
         val dialog = VoiceDialog()
         dialog.seed(draft)
         dialog.review(HealthData(), now, zone)
@@ -196,13 +212,16 @@ class VoiceDialogTest {
     }
 
     @Test fun invalidMeasurementsNeverReachConfirmation() {
-        listOf("давление 70 на 90 пульс 60", "давление 120 на 80 пульс 0", "давление 120 на 80 пульс 65 завтра").forEach {
+        listOf("давление 120 на 80 пульс 0", "давление 120 на 80 пульс 65 завтра").forEach {
             val dialog = VoiceDialog()
             dialog.say(it)
             assertEquals(DialogPhase.CORRECTION, dialog.state.phase)
             dialog.say("сохранить")
             assertNotEquals(DialogPhase.COMMIT, dialog.state.phase)
         }
+        val unusual = VoiceDialog()
+        unusual.say("давление 70 на 90 пульс 60")
+        assertEquals(DialogPhase.CONFIRM, unusual.state.phase)
     }
 
     @Test fun navigationReadingAndUnsupportedEditingDoNotMakeDrafts() {
@@ -211,5 +230,60 @@ class VoiceDialogTest {
         assertEquals(VoiceCommand.ReadSchedule(today.plusDays(1)), VoiceParser.parse("прочитай расписание на завтра", today))
         assertEquals(VoiceCommand.ReadSchedule(today), VoiceParser.parse("что мне принимать сегодня", today))
         listOf("удали давление", "редактируй лекарство").forEach { assertEquals(VoiceCommand.Unknown, VoiceParser.parse(it, today)) }
+    }
+
+    @Test fun voiceTimerAndStockWaitForWholeConfirmation() {
+        val card = UserMedication("card", LEGACY_PROFILE_ID, "Тестол", "Таблетка", "40 мг",
+            DoseUnit.TABLET, true, null)
+        val data = HealthData(medications = listOf(card))
+        val timer = VoiceDialog()
+        timer.say("напомни выпить Тестол 1 таблетку через пятнадцать минут", data)
+        assertEquals(DialogPhase.CONFIRM, timer.state.phase)
+        assertEquals("card", timer.state.selectedMedicationId)
+        assertEquals("1", timer.state.timerAmount?.toPlainString())
+        timer.say("да позже", data)
+        assertEquals(DialogPhase.CONFIRM, timer.state.phase)
+        timer.say("да", data)
+        assertEquals(DialogPhase.COMMIT, timer.state.phase)
+
+        val stock = VoiceDialog()
+        stock.say("пополни остаток Тестол на 0,5 таблетки", data)
+        assertEquals(DialogPhase.CONFIRM, stock.state.phase)
+        assertEquals("0.5", stock.state.stockChange?.amount?.toPlainString())
+        stock.say("отмена", data)
+        assertEquals(DialogPhase.CANCELLED, stock.state.phase)
+    }
+
+    @Test fun absoluteReminderUsesLocalTimeAndNeedsConfirmation() {
+        val command = VoiceParser.parse("напомни измерить давление сегодня в 18:30", today)
+        assertEquals(VoiceCommand.AtReminder("измерить давление", today.atTime(18, 30)), command)
+        val dialog = VoiceDialog()
+        dialog.say("напомни измерить давление сегодня в 18:30")
+        assertEquals(DialogPhase.CONFIRM, dialog.state.phase)
+        assertEquals(today.atTime(18, 30), dialog.state.atReminder?.at)
+        dialog.say("нет")
+        assertEquals(DialogPhase.PAUSED, dialog.state.phase)
+        val accepted = VoiceDialog()
+        accepted.say("напомни измерить давление завтра в 09:00")
+        accepted.say("да")
+        assertEquals(DialogPhase.COMMIT, accepted.state.phase)
+        val past = VoiceDialog()
+        past.say("напомни измерить давление сегодня в 09:00")
+        assertNotEquals(DialogPhase.COMMIT, past.state.phase)
+    }
+
+    @Test fun voicePostponeAndMarkAllListTargetsBeforeConfirmation() {
+        val draft = ScheduleDraft("Тестол", Repeat.DAILY, emptySet(), today, null,
+            listOf(DoseTime("am", LocalTime.of(9, 0), Dose.parse("1", DoseUnit.TABLET))))
+        val data = HealthData(schedules = listOf(ScheduleRevision("r", "s", today.atStartOfDay(),
+            draft = draft)))
+        val postpone = VoiceDialog()
+        postpone.say("отложи Тестол на 15 минут", data)
+        assertEquals(DialogPhase.CONFIRM, postpone.state.phase)
+        assertEquals("s/$today/am", postpone.state.selected?.key)
+        val all = VoiceDialog()
+        all.say("принял все", data)
+        assertEquals(DialogPhase.CONFIRM, all.state.phase)
+        assertEquals(1, all.state.selectedMany.size)
     }
 }

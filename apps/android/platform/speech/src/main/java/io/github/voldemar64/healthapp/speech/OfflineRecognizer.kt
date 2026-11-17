@@ -45,7 +45,7 @@ class OfflineRecognizer(private val context: Context) : VoiceInput {
                         check(parts.size == 2)
                         val file = File(temporary, parts[1]).canonicalFile
                         check(file.toPath().startsWith(temporary.canonicalFile.toPath()))
-                        file.parentFile.mkdirs()
+                        checkNotNull(file.parentFile).mkdirs()
                         val digest = MessageDigest.getInstance("SHA-256")
                         context.assets.open("vosk/${parts[1]}").use { source -> file.outputStream().use { target ->
                             val bytes = ByteArray(65536)
@@ -86,7 +86,7 @@ class OfflineRecognizer(private val context: Context) : VoiceInput {
                     audio.startRecording()
                     val samples = ShortArray(1600)
                     val started = SystemClock.elapsedRealtime()
-                    while (SystemClock.elapsedRealtime() - started < 25000) {
+                    while (SystemClock.elapsedRealtime() - started < 15000) {
                         currentCoroutineContext().ensureActive()
                         val count = audio.read(samples, 0, samples.size)
                         if (count <= 0) throw SpeechFailure("MICROPHONE")
@@ -157,7 +157,8 @@ internal fun SpeechContext.phrases(): List<String>? {
         "одиннадцать двенадцать тринадцать четырнадцать пятнадцать шестнадцать семнадцать восемнадцать девятнадцать " +
         "двадцать тридцать сорок пятьдесят шестьдесят семьдесят восемьдесят девяносто " +
         "сто двести триста четыреста пятьсот шестьсот семьсот восемьсот девятьсот тысяча").split(' ')
-    val units = listOf("таблетка", "таблетки", "таблетку", "таблеток", "миллиграмм", "миллиграмма", "миллиграммов",
+    val units = listOf("таблетка", "таблетки", "таблетку", "таблеток", "капсула", "капсулы", "капсулу", "капсул",
+        "миллиграмм", "миллиграмма", "миллиграммов",
         "грамм", "грамма", "граммов")
     val vocabulary = when (this) {
         SpeechContext.FREE -> return null

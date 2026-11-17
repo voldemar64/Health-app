@@ -14,8 +14,8 @@ android {
             "io.github.voldemar64.healthapp.qa" else "io.github.voldemar64.healthapp"
         minSdk = 29
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.4.1"
+        versionCode = 6
+        versionName = "0.5.0"
         testInstrumentationRunner = "io.github.voldemar64.healthapp.HealthTestRunner"
     }
 
@@ -50,6 +50,7 @@ dependencies {
     implementation(libs.coroutines.core)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation(libs.work.runtime.ktx)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     testImplementation(libs.junit)

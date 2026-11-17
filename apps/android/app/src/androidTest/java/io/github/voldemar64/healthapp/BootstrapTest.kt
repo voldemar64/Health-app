@@ -31,7 +31,7 @@ class BootstrapTest {
     fun clearData() {
         (compose.activity.application as HealthApplication).database.clearAllTables()
         compose.waitUntil(10_000) {
-            compose.onAllNodes(hasText("Пока нет измерений")).fetchSemanticsNodes().isNotEmpty()
+            compose.onAllNodes(hasText("Последнее давление")).fetchSemanticsNodes().isNotEmpty()
         }
     }
 
@@ -41,15 +41,15 @@ class BootstrapTest {
     }
 
     @Test
-    fun startsOnPressureAndRepeatedTabSelectionDoesNotDuplicateBackStack() {
+    fun startsOnTodayAndRepeatedTabSelectionDoesNotDuplicateBackStack() {
         assertEquals("ru", compose.activity.resources.configuration.locales[0].language)
         assertEquals("ru", java.util.Locale.getDefault().language)
-        compose.onNodeWithText("Пока нет измерений").assertIsDisplayed()
+        compose.onNodeWithText("Последнее давление").assertIsDisplayed()
         repeat(3) { selectMedications() }
         compose.onNode(hasText("Лекарства") and hasClickAction()).assertIsSelected()
         compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
-        compose.onNodeWithText("Пока нет измерений").assertIsDisplayed()
-        compose.onNode(hasText("Давление") and hasClickAction()).assertIsSelected()
+        compose.onNodeWithText("Последнее давление").assertIsDisplayed()
+        compose.onNode(hasText("Сегодня") and hasClickAction()).assertIsSelected()
     }
 
     @Test
@@ -84,7 +84,7 @@ class BootstrapTest {
         shell("cmd uimode night yes")
         try {
             compose.activityRule.scenario.recreate()
-            compose.onNodeWithText("Пока нет измерений").assertIsDisplayed()
+            compose.onNodeWithText("Последнее давление").assertIsDisplayed()
             val pixels = compose.onRoot().captureToImage().toPixelMap()
             assertEquals(Color(0xFFEDECF2), pixels[0, 0])
             compose.activityRule.scenario.onActivity { activity ->
@@ -112,7 +112,7 @@ class BootstrapTest {
             compose.waitUntil(10_000) { compose.activity.resources.configuration.fontScale >= 1.99f }
             compose.onNode(hasText("Лекарства") and hasClickAction()).assertIsDisplayed().performClick()
             compose.onNodeWithText("Пока нет расписания").performScrollTo().assertIsDisplayed()
-            compose.onNode(hasText("Давление") and hasClickAction()).assertIsDisplayed().performClick()
+            compose.onNode(hasText("История") and hasClickAction()).assertIsDisplayed().performClick()
             compose.onNodeWithText("Пока нет измерений").performScrollTo().assertIsDisplayed()
         } finally {
             if (originalScale == "null" || originalScale.isBlank()) {
