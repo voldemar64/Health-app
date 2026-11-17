@@ -94,8 +94,10 @@ internal fun <T> Choices(values: List<T>, selected: T?, label: @Composable (T) -
 
 internal fun unitResource(unit: DoseUnit) = when (unit) {
     DoseUnit.TABLET -> R.string.unit_tablet
+    DoseUnit.CAPSULE -> R.string.unit_capsule
     DoseUnit.MG -> R.string.unit_mg
     DoseUnit.G -> R.string.unit_g
+    DoseUnit.OTHER -> R.string.unit_other
 }
 
 @Composable

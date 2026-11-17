@@ -2,8 +2,10 @@ package io.github.voldemar64.healthapp.domain
 
 import java.time.DayOfWeek
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
+import java.math.BigDecimal
 import java.util.Locale
 
 // Explicit Unicode boundaries behave equally on Android ICU and JDK 21.
@@ -13,13 +15,13 @@ private fun voiceRegex(pattern: String): Regex {
 }
 
 enum class VoiceKind { PRESSURE, MEDICATION, MARK }
-enum class VoiceField { SYSTOLIC, DIASTOLIC, PULSE, NAME, AMOUNT, UNIT, TIMES, REPEAT, DAYS, DATE, END_DATE, STATUS }
+enum class VoiceField { SYSTOLIC, DIASTOLIC, PULSE, NAME, FORM, STRENGTH, STOCK, AMOUNT, UNIT, TIMES, REPEAT, DAYS, DATE, END_DATE, STATUS }
 data class VoiceDose(val id: String = newId(), val time: String = "09:00", val amount: String = "1", val unit: String = "TABLET")
 data class VoiceDraft(val kind: VoiceKind, val values: Map<VoiceField, String> = emptyMap(), val id: String = newId(),
     val slots: List<VoiceDose>? = null) {
     fun missing(): VoiceField? {
         val required = when (kind) {
-            VoiceKind.PRESSURE -> listOf(VoiceField.SYSTOLIC, VoiceField.DIASTOLIC, VoiceField.PULSE)
+            VoiceKind.PRESSURE -> listOf(VoiceField.SYSTOLIC, VoiceField.DIASTOLIC)
             VoiceKind.MEDICATION -> listOf(VoiceField.NAME, VoiceField.AMOUNT, VoiceField.UNIT, VoiceField.TIMES, VoiceField.REPEAT)
             VoiceKind.MARK -> listOf(VoiceField.NAME)
         }
@@ -32,6 +34,11 @@ sealed interface VoiceCommand {
     data class Draft(val value: VoiceDraft) : VoiceCommand
     data class Navigate(val destination: String) : VoiceCommand
     data class ReadSchedule(val date: LocalDate) : VoiceCommand
+    data object MarkAll : VoiceCommand
+    data class TimerReminder(val title: String, val minutes: Long) : VoiceCommand
+    data class AtReminder(val title: String, val at: LocalDateTime) : VoiceCommand
+    data class StockChange(val name: String, val amount: BigDecimal, val reconcile: Boolean) : VoiceCommand
+    data class Postpone(val name: String, val minutes: Long) : VoiceCommand
     data object Unknown : VoiceCommand
 }
 
@@ -80,11 +87,50 @@ object VoiceParser {
     private val drug = voiceRegex("\\b(?:лекарств[а-я]*|препарат[а-я]*|таблет[а-я]*)\\b")
     private val add = voiceRegex("\\b(?:добав[а-я]*|запиш[а-я]*|запис[а-я]*|внес[а-я]*|созда[а-я]*|назнач[а-я]*)\\b")
     private val navigate = voiceRegex("\\b(?:откро[а-я]*|перей[а-я]*|покаж[а-я]*)\\b")
-    private val mark = voiceRegex("\\b(?:отмет[а-я]*|принял[аи]?|выпил[аи]?|пропустил[аи]?)\\b")
+    private val mark = voiceRegex("\\b(?:отмет[а-я]*|принял[аи]?|выпил[аи]?|пропуст[а-я]*)\\b")
 
     fun parse(raw: String, today: LocalDate): VoiceCommand {
         val text = RussianNumbers.normalize(raw)
-        if (text.contains("пропус") || text.contains("пропущ")) return VoiceCommand.Unknown
+        val timer = voiceRegex("^напомн[а-я]*(?: мне)? через (\\d{1,5}) минут[а-я]* (.+)$")
+            .find(text)?.let { it.groupValues[2] to it.groupValues[1] }
+            ?: voiceRegex("^напомн[а-я]*(?: мне)? (.+) через (\\d{1,5}) минут[а-я]*$")
+                .find(text)?.let { it.groupValues[1] to it.groupValues[2] }
+        if (timer != null) {
+            val minutes = timer.second.toLongOrNull()
+            if (minutes != null && minutes in 1..10080 && timer.first.isNotBlank())
+                return VoiceCommand.TimerReminder(timer.first, minutes)
+            return VoiceCommand.Unknown
+        }
+        val absolute = voiceRegex("^напомн[а-я]*(?: мне)? (.+?) в (\\d{1,2})(?::(\\d{2}))?$")
+            .find(text)
+        if (absolute != null) {
+            val rawTitle = absolute.groupValues[1].trim()
+            val date = when {
+                rawTitle.endsWith(" завтра") -> today.plusDays(1)
+                else -> today
+            }
+            val title = rawTitle.removeSuffix(" завтра").removeSuffix(" сегодня").trim()
+            val hour = absolute.groupValues[2].toIntOrNull()
+            val minute = absolute.groupValues[3].ifBlank { "0" }.toIntOrNull()
+            if (title.isNotBlank() && hour != null && hour in 0..23 && minute != null && minute in 0..59)
+                return VoiceCommand.AtReminder(title, date.atTime(hour, minute))
+            return VoiceCommand.Unknown
+        }
+        val stock = voiceRegex("^(пополни|пополнить|сверь|сверить) (?:остаток|запас) (.+?) (?:на )?(\\d+(?:[.,]\\d+)?) (?:таблет[а-я]*|капсул[а-я]*|единиц[а-я]*)?$")
+            .find(text)
+        if (stock != null) return runCatching<VoiceCommand> {
+            VoiceCommand.StockChange(stock.groupValues[2].trim(),
+                parseStockAmount(stock.groupValues[3]), stock.groupValues[1].startsWith("свер"))
+        }.getOrDefault(VoiceCommand.Unknown)
+        val postpone = voiceRegex("^(?:отложи|отложить|перенеси|перенести) (?:прием )?(.+?) на (\\d{1,5}) минут[а-я]*$")
+            .find(text)
+        if (postpone != null) {
+            val minutes = postpone.groupValues[2].toLongOrNull()
+            if (minutes != null && minutes in 1..1440) return VoiceCommand.Postpone(postpone.groupValues[1], minutes)
+            return VoiceCommand.Unknown
+        }
+        if (voiceRegex("\\b(?:принял[аи]?|выпил[аи]?) все\\b|\\bвсе (?:принял[аи]?|выпил[аи]?)\\b")
+                .containsMatchIn(text)) return VoiceCommand.MarkAll
         if (voiceRegex("\\b(?:удал[а-я]*|сотр[а-я]*|редакт[а-я]*)\\b").containsMatchIn(text)) return VoiceCommand.Unknown
         if ((text.contains("что") && voiceRegex("приним|пить|принять").containsMatchIn(text)) ||
             voiceRegex("проч[а-я]*|зачит[а-я]*|озвуч[а-я]*").containsMatchIn(text) && (drug.containsMatchIn(text) || text.contains("расписан"))) {
@@ -113,6 +159,12 @@ object VoiceParser {
                 values[expected] = raw.trim()
                 return draft.copy(values = values)
             }
+            VoiceField.FORM, VoiceField.STRENGTH -> if (raw.trim().isNotBlank()) {
+                values[expected] = raw.trim()
+                return draft.copy(values = values)
+            }
+            VoiceField.STOCK -> if (text.contains("неизвест") || text.contains("не знаю"))
+                values[expected] = "UNKNOWN" else number?.let { values[expected] = it }
             VoiceField.SYSTOLIC, VoiceField.DIASTOLIC, VoiceField.PULSE, VoiceField.AMOUNT -> number?.let { values[expected] = it }
             VoiceField.DATE, VoiceField.END_DATE -> parseDate(text, today)?.let { values[expected] = it.format(dateFormat) }
             VoiceField.TIMES -> parseTimes("в $text").takeIf { it.isNotEmpty() }?.let { values[expected] = it.joinToString("; ") }
@@ -127,14 +179,14 @@ object VoiceParser {
             parseTimes(text).takeIf { it.isNotEmpty() }?.let { values[VoiceField.TIMES] = it.joinToString("; ") }
         }
         if (draft.kind != VoiceKind.PRESSURE) {
-            val dose = voiceRegex("(\\d+(?:[.,]\\d+)?)\\s*(таблет[а-я]*|табл\\.?|миллиграм[а-я]*|мг|грам[а-я]*|г\\b)").find(text)
+            val dose = voiceRegex("(\\d+(?:[.,]\\d+)?)\\s*(таблет[а-я]*|табл\\.?|капсул[а-я]*|миллиграм[а-я]*|мг|грам[а-я]*|г\\b)").find(text)
             dose?.let {
                 values[VoiceField.AMOUNT] = it.groupValues[1].replace(',', '.')
                 values[VoiceField.UNIT] = unit(it.groupValues[2])!!
             }
             if (expected == VoiceField.UNIT) unit(text)?.let { values[VoiceField.UNIT] = it }
             if (expected == null && values[VoiceField.NAME].isNullOrBlank()) {
-                val prefix = text.replace(voiceRegex("^(?:пожалуйста )?(?:добав[а-я]*|запиш[а-я]*|запис[а-я]*|внес[а-я]*|созда[а-я]*|назнач[а-я]*|отмет[а-я]*|принял[аи]?|выпил[аи]?|пропустил[аи]?)\\s*"), "")
+                val prefix = text.replace(voiceRegex("^(?:пожалуйста )?(?:добав[а-я]*|запиш[а-я]*|запис[а-я]*|внес[а-я]*|созда[а-я]*|назнач[а-я]*|отмет[а-я]*|принял[аи]?|выпил[аи]?|пропуст[а-я]*)\\s*"), "")
                     .replace(voiceRegex("^(?:(?:лекарств[а-я]*|препарат[а-я]*|таблет[а-я]*|прием[а-я]*|утренн[а-я]*|вечерн[а-я]*|дневн[а-я]*)\\s+)+"), "")
                 val name = prefix.split(voiceRegex("\\s+(?=\\d|кажд|ежеднев|однократ|разово|сегодня|завтра|вчера|по |в |как |принят|пропущ)"), limit = 2).first().trim(' ', '.', ',')
                 if (name.isNotBlank() && !drug.matches(name)) values[VoiceField.NAME] = name
@@ -178,6 +230,7 @@ object VoiceParser {
 
     private fun unit(text: String): String? = when {
         voiceRegex("таблет|табл").containsMatchIn(text) -> "TABLET"
+        voiceRegex("капсул").containsMatchIn(text) -> "CAPSULE"
         voiceRegex("миллиграм|\\bмг\\b").containsMatchIn(text) -> "MG"
         voiceRegex("грам|\\bг\\b").containsMatchIn(text) -> "G"
         else -> null

@@ -23,6 +23,8 @@ class ManualEntryTest {
     private val app get() = compose.activity.application as HealthApplication
     @Before fun clearData() {
         app.database.clearAllTables()
+        waitText("Последнее давление")
+        compose.onNode(hasText("История") and hasClickAction()).performClick()
         waitText("Пока нет измерений")
     }
     @After fun cleanup() { app.database.clearAllTables() }
@@ -43,17 +45,23 @@ class ManualEntryTest {
         node.performSemanticsAction(SemanticsActions.OnClick) { action -> check(action()) }
     }
     private fun type(label: String, value: String) { compose.onNodeWithText(label).performScrollTo().performTextReplacement(value) }
+    private fun tap(text: String) {
+        val selector = hasText(text) and hasClickAction() and isEnabled()
+        compose.waitUntil(10_000) { compose.onAllNodes(selector).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(selector).performSemanticsAction(SemanticsActions.OnClick) { action -> check(action()) }
+    }
 
-    @Test fun unifiedEntryKeepsIndependentDraftsAndPulseIsRequired() {
+    @Test fun unifiedEntryKeepsIndependentDraftsAndRejectsInvalidPulse() {
         compose.onNodeWithContentDescription("Добавить запись").performClick()
         type("Верхнее давление, мм рт. ст.", "120")
         type("Нижнее давление, мм рт. ст.", "80")
+        type("Пульс, уд/мин", "0")
         compose.onNode(hasText("Лекарства") and hasClickAction()).performScrollTo().performClick()
         type("Название лекарства", "Новое лекарство")
         compose.onNode(hasText("Давление") and hasClickAction()).performScrollTo().performClick()
         compose.onNodeWithText("120").assertExists()
         click("Сохранить")
-        waitText("Введите пульс: целое число от 1 до 999. Поле обязательно.")
+        waitText("Введите пульс: целое число от 1 до 999 или оставьте поле пустым.")
         compose.onNodeWithText("Закрыть").performClick()
         compose.onNode(hasText("Лекарства") and hasClickAction()).performScrollTo().performClick()
         compose.onNodeWithText("Новое лекарство").assertExists()
@@ -103,21 +111,49 @@ class ManualEntryTest {
         runBlocking { assertTrue(app.repository.data.first().pressures.isEmpty()) }
     }
 
-    @Test fun invalidPressureDoesNotLeaveFormOrWriteData() {
+    @Test fun unusualPressureRequiresConfirmationAndCancelDoesNotWrite() {
         compose.onNodeWithContentDescription("Добавить запись").performClick()
         type("Верхнее давление, мм рт. ст.", "70")
         type("Нижнее давление, мм рт. ст.", "90")
         click("Сохранить")
-        waitText("Не удалось выполнить действие")
-        compose.onNodeWithText("Закрыть").performClick()
+        waitText("Перепроверьте давление")
+        compose.onAllNodes(hasText("Отмена") and hasClickAction()).onLast().performClick()
         compose.onNodeWithText("Новое измерение").assertExists()
         runBlocking { assertTrue(app.repository.data.first().pressures.isEmpty()) }
+    }
+
+    @Test fun switchingProfilesChangesVisiblePressureHistory() {
+        tap("Профили")
+        compose.onNodeWithText("Имя профиля").performTextReplacement("Игорь")
+        tap("Создать профиль")
+        tap("Закрыть")
+        waitText("Игорь")
+        compose.onNodeWithContentDescription("Добавить запись").performClick()
+        type("Верхнее давление, мм рт. ст.", "130")
+        type("Нижнее давление, мм рт. ст.", "85")
+        type("Заметка", "После прогулки")
+        click("Сохранить")
+        waitText("130/85 мм рт. ст.")
+        runBlocking {
+            val measurement = app.repository.data.first().pressures.single()
+            assertEquals("После прогулки", measurement.note)
+            assertEquals(InputSource.MANUAL, measurement.inputSource)
+        }
+        tap("Профили")
+        tap("Основной")
+        compose.waitUntil(10_000) { app.repository.activeProfileId.value == LEGACY_PROFILE_ID }
+        waitText("Пока нет измерений")
+        tap("Профили")
+        tap("Игорь")
+        waitText("130/85 мм рт. ст.")
     }
 
     @Test fun medicationFormStoresFractionAndWeeklyDaysAcrossRecreation() {
         click("Лекарства")
         compose.onNodeWithContentDescription("Добавить запись").performClick()
         type("Название лекарства", "Тестовое лекарство")
+        type("Форма лекарства", "Таблетка")
+        type("Начальный остаток, единиц", "30")
         click("По дням недели")
         click("понедельник")
         click("четверг")
@@ -186,6 +222,8 @@ class ManualEntryTest {
             click("Лекарства")
             compose.onNodeWithContentDescription("Добавить запись").performClick()
             type("Название лекарства", "Две дозы")
+            type("Форма лекарства", "Таблетка")
+            type("Начальный остаток, единиц", "30")
             click("Добавить время")
             compose.activityRule.scenario.recreate()
             compose.onNodeWithText("Приём 2").performScrollTo().assertIsDisplayed()

@@ -99,6 +99,9 @@ internal fun renderHealthReport(snapshot: ReportSnapshot): ByteArray {
         fun status(item: Occurrence): String = when (records[item.key]?.status) {
             IntakeStatus.TAKEN -> "✓ Принято"
             IntakeStatus.SKIPPED -> "Пропущено"
+            IntakeStatus.PENDING -> "Ожидает подтверждения"
+            IntakeStatus.POSTPONED -> "Отложено"
+            IntakeStatus.UNCONFIRMED -> "Не подтверждено"
             null -> if (item.instant(snapshot.zone) <= snapshot.generatedAt) "Не отмечено" else "Запланировано"
         }
         if (items.isEmpty()) writer.text("За этот период приёмов нет.")
@@ -112,7 +115,8 @@ internal fun renderHealthReport(snapshot: ReportSnapshot): ByteArray {
                 val actual = record?.takenAt?.atZone(record.recordedZoneId.let(ZoneId::of))
                 writer.tableRow(listOf(historical.date.format(dateFormat), historical.name,
                     historical.dose.text.replace('.', ',') + " " + when (historical.dose.unit) {
-                        DoseUnit.TABLET -> "табл."; DoseUnit.MG -> "мг"; DoseUnit.G -> "г"
+                        DoseUnit.TABLET -> "табл."; DoseUnit.CAPSULE -> "капс.";
+                        DoseUnit.MG -> "мг"; DoseUnit.G -> "г"; DoseUnit.OTHER -> "ед."
                     }, historical.time.format(timeFormat), status(item),
                     actual?.let { "${it.format(dateFormat)} ${it.format(timeFormat)}\n${record.recordedZoneId}" } ?: "-"))
             }

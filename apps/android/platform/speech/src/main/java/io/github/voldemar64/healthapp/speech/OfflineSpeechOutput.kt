@@ -42,7 +42,7 @@ class OfflineSpeechOutput(private val context: Context) : VoiceOutput {
                 }
                 continuation.invokeOnCancellation {
                     if (engine === created) engine = null
-                    created?.shutdown()
+                    created.shutdown()
                 }
             }
         }

@@ -15,6 +15,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
+import kotlinx.coroutines.flow.collect
 import kotlin.math.roundToInt
 
 @Composable
@@ -33,11 +34,15 @@ internal fun PressureScreen(state: HealthState, model: HealthViewModel, padding:
     }
     val end = state.now.atZone(ZoneId.systemDefault()).toLocalDate()
     val start = end.minusDays(period.toLong() - 1)
-    val list = pressureInRange(state.data.pressures, start, end, ZoneId.systemDefault())
+    val periodData by produceState<HealthData?>(null, state.activeProfileId, start, end) {
+        model.observePeriod(state.activeProfileId, start, end).collect { value = it }
+    }
+    val reportData = periodData
+    val list = periodData?.pressures.orEmpty().sortedBy { it.measuredAt }
     ScreenColumn(padding) {
         Heading(R.string.pressure_title)
         Choices(listOf(7, 30), period, { stringResource(if (it == 7) R.string.days_7 else R.string.days_30) }) { period = it }
-        if (!state.loaded) Text(stringResource(R.string.loading))
+        if (!state.loaded || periodData == null) Text(stringResource(R.string.loading))
         else {
             if (state.data.pressures.isEmpty()) EmptyState(R.string.pressure_empty_title, R.string.pressure_empty_body)
             else if (list.isEmpty()) Text(stringResource(R.string.no_measurements_period))
@@ -45,7 +50,9 @@ internal fun PressureScreen(state: HealthState, model: HealthViewModel, padding:
                 MeasurementChart(list, pulse = false)
                 if (list.any { it.pulse != null }) MeasurementChart(list, pulse = true)
             }
-            if (state.data.pressures.isNotEmpty() || state.data.schedules.isNotEmpty() || state.data.intakes.isNotEmpty()) ReportExport(state.data, period)
+            if (reportData != null && (reportData.pressures.isNotEmpty() ||
+                    reportData.schedules.isNotEmpty() || reportData.intakes.isNotEmpty()))
+                ReportExport(reportData, period)
             if (list.isNotEmpty()) {
                 list.asReversed().forEach { item ->
                     Card(Modifier.fillMaxWidth()) {
@@ -76,36 +83,51 @@ internal fun PressureScreen(state: HealthState, model: HealthViewModel, padding:
 @Composable
 internal fun PressureForm(existing: PressureMeasurement?, saving: Boolean, padding: PaddingValues,
     onClose: () -> Unit, header: @Composable ColumnScope.() -> Unit = {},
-    sharedDraft: VoiceDraft? = null, onDraft: ((VoiceDraft) -> Unit)? = null,
+    sharedDraft: PressureFormDraft? = null, onDraft: ((PressureFormDraft) -> Unit)? = null,
     onSave: (() -> PressureMeasurement) -> Unit) {
-    var localDraft by rememberLocalDraft { pressureDraft(existing) }
+    var localDraft by rememberPressureFormDraft(existing)
+    var note by rememberSaveable(existing?.id) { mutableStateOf(existing?.note.orEmpty()) }
+    var confirmOrder by rememberSaveable { mutableStateOf(false) }
     val draft = sharedDraft ?: localDraft
-    fun update(field: VoiceField, value: String) {
-        val changed = draft.withValue(field, value)
+    fun update(changed: PressureFormDraft) {
+        confirmOrder = false
         if (onDraft != null) onDraft(changed) else localDraft = changed
+    }
+    val createMeasurement: () -> PressureMeasurement = {
+        checkInput(draft.pulse.isBlank() || draft.pulse.toIntOrNull() != null, InputError.PULSE)
+        PressureMeasurement(draft.id, draft.systolic.toIntOrNull() ?: 0,
+            draft.diastolic.toIntOrNull() ?: 0,
+            draft.pulse.takeIf(String::isNotBlank)?.toIntOrNull(),
+            LocalDate.parse(draft.date, dateFormat).atTime(LocalTime.parse(draft.time))
+                .atZone(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault().id, note,
+            inputSource = InputSource.MANUAL)
     }
     BackHandler { if (!saving) onClose() }
     ScreenColumn(padding, enabled = !saving) {
         header()
         Heading(if (existing == null) R.string.new_pressure else R.string.edit_pressure)
-        Input(draft.value(VoiceField.SYSTOLIC), { update(VoiceField.SYSTOLIC, it) }, R.string.systolic, KeyboardType.Number)
-        Input(draft.value(VoiceField.DIASTOLIC), { update(VoiceField.DIASTOLIC, it) }, R.string.diastolic, KeyboardType.Number)
-        Input(draft.value(VoiceField.PULSE), { update(VoiceField.PULSE, it) }, R.string.pulse, KeyboardType.Number)
-        DateButton(R.string.date, runCatching { LocalDate.parse(draft.value(VoiceField.DATE), dateFormat) }.getOrDefault(LocalDate.now())) {
-            update(VoiceField.DATE, it.format(dateFormat))
+        Input(draft.systolic, { update(draft.copy(systolic = it)) }, R.string.systolic, KeyboardType.Number)
+        Input(draft.diastolic, { update(draft.copy(diastolic = it)) }, R.string.diastolic, KeyboardType.Number)
+        Input(draft.pulse, { update(draft.copy(pulse = it)) }, R.string.pulse, KeyboardType.Number)
+        Input(note, { note = it }, R.string.note, singleLine = false)
+        DateButton(R.string.date, runCatching { LocalDate.parse(draft.date, dateFormat) }.getOrDefault(LocalDate.now())) {
+            update(draft.copy(date = it.format(dateFormat)))
         }
-        TimeButton(runCatching { LocalTime.parse(draft.value(VoiceField.TIMES)) }.getOrDefault(LocalTime.now())) {
-            update(VoiceField.TIMES, it.format(timeFormat))
+        TimeButton(runCatching { LocalTime.parse(draft.time) }.getOrDefault(LocalTime.now())) {
+            update(draft.copy(time = it.format(timeFormat)))
         }
         ActionButton(R.string.save, Modifier.fillMaxWidth(), !saving) {
-            onSave {
-                checkInput(draft.value(VoiceField.PULSE).toIntOrNull() != null, InputError.PULSE)
-                PressureMeasurement(draft.id, draft.value(VoiceField.SYSTOLIC).toIntOrNull() ?: 0,
-                    draft.value(VoiceField.DIASTOLIC).toIntOrNull() ?: 0, draft.value(VoiceField.PULSE).toIntOrNull(),
-                    LocalDate.parse(draft.value(VoiceField.DATE), dateFormat).atTime(LocalTime.parse(draft.value(VoiceField.TIMES)))
-                        .atZone(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault().id, existing?.note.orEmpty())
-            }
+            val top = draft.systolic.toIntOrNull()
+            val bottom = draft.diastolic.toIntOrNull()
+            if (top != null && bottom != null && top <= bottom) confirmOrder = true else onSave(createMeasurement)
         }
         ActionButton(R.string.cancel, enabled = !saving, onClick = onClose)
     }
+    if (confirmOrder) AlertDialog(onDismissRequest = { confirmOrder = false },
+        title = { Text(stringResource(R.string.pressure_order_title)) },
+        text = { Text(stringResource(R.string.pressure_order_body, draft.systolic, draft.diastolic)) },
+        confirmButton = { ActionButton(R.string.save) {
+            confirmOrder = false
+            onSave(createMeasurement)
+        } }, dismissButton = { ActionButton(R.string.cancel) { confirmOrder = false } })
 }

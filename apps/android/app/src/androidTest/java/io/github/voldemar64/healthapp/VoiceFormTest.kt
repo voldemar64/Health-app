@@ -50,7 +50,9 @@ class VoiceFormTest {
                 }
             }
             compose.runOnIdle { voice.start() }
-            compose.waitUntil(15000) { voice.state.value.status == R.string.voice_listening }
+            runBlocking { answers.send("1") }
+            compose.waitUntil(15000) { voice.state.value.status == R.string.voice_listening &&
+                voice.state.value.prompt.contains("Скажите давление") }
             compose.onNodeWithText("Слушаю…").assertIsDisplayed()
             compose.onNodeWithText("Верхнее давление, мм рт. ст.").assertIsDisplayed()
             compose.onNodeWithText("Скажите давление и пульс.").assertDoesNotExist()

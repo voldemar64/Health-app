@@ -20,7 +20,7 @@ class SpeechContextTest {
     }
 
     @Test fun confirmationAndCorrectionOverridePressureFormContext() {
-        assertEquals(SpeechContext.CONFIRM,
+        assertEquals(SpeechContext.FREE,
             listeningContext(DialogState(phase = DialogPhase.CONFIRM), VoiceKind.PRESSURE))
         assertEquals(SpeechContext.CORRECTION,
             listeningContext(DialogState(phase = DialogPhase.CORRECTION), VoiceKind.PRESSURE))
